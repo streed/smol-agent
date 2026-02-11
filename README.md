@@ -119,6 +119,8 @@ The agent has access to the following tools:
 | `list_files` | Glob-based file and directory listing |
 | `shell` | Execute shell commands (builds, tests, git, etc.) |
 | `grep` | Regex search across files with line numbers |
+| `web_search` | Search the web via DuckDuckGo (no API key needed) |
+| `web_fetch` | Fetch a URL and return its content as readable text |
 | `ask_user` | Ask the user a clarifying question and wait for a response |
 
 The model decides which tools to call and when. It will loop — calling tools and feeding results back in — until it produces a final text response.
@@ -152,6 +154,8 @@ src/
     ├── list_files.js     Glob-based file listing
     ├── shell.js          Shell command execution
     ├── grep.js           Regex search across files
+    ├── web_search.js     DuckDuckGo web search
+    ├── web_fetch.js      Fetch and extract text from URLs
     └── ask_user.js       Ask the user for clarification
 ```
 
