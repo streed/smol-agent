@@ -123,12 +123,24 @@ The agent has access to the following tools:
 
 The model decides which tools to call and when. It will loop — calling tools and feeding results back in — until it produces a final text response.
 
+## Context injection
+
+When the agent starts (or after `/reset`), it automatically gathers context about the current project and injects it into the system prompt. This gives the model immediate awareness of:
+
+- **Working directory** and **file tree** (top 2 levels, ignoring node_modules/.git/etc.)
+- **Git status** — current branch, uncommitted changes, and recent commit history
+- **Config files** — package.json, tsconfig.json, pyproject.toml, Cargo.toml, go.mod, Makefile, .env.example (whichever exist)
+- **README excerpt** — first 80 lines of any README file
+
+This means the model already knows your project layout, language, dependencies, and available scripts before you even ask your first question — so it can give better answers with fewer tool calls.
+
 ## Architecture
 
 ```
 src/
 ├── index.js              CLI entry point, arg parsing, Ink render
 ├── agent.js              Agent loop (EventEmitter): prompt → LLM → tool calls → repeat
+├── context.js            Project context gathering (file tree, git, configs, README)
 ├── ollama.js             Thin wrapper around the ollama npm package
 ├── ui/
 │   └── App.js            Ink (React) terminal UI — message log, spinner, input
@@ -144,6 +156,8 @@ src/
 ```
 
 Each tool file self-registers with the registry on import. The agent imports them all, and the registry serializes them into the format Ollama expects for tool-calling.
+
+On first run, `context.js` gathers a snapshot of the project (file tree, git state, config files, README) and appends it to the system prompt. This gives the model grounding in the project before any tool calls happen.
 
 The Ink UI subscribes to `tool_call`, `tool_result`, `response`, and `error` events emitted by the agent, rendering tool activity in real time with a spinner and status text. The `ask_user` tool is wired through a promise bridge so the Ink app collects the answer inline without readline conflicts.
 
