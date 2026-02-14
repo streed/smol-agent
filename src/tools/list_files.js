@@ -1,5 +1,6 @@
 import { glob } from "glob";
 import { register } from "./registry.js";
+import { resolveJailedPath } from "../path-utils.js";
 
 register("list_files", {
   description:
@@ -19,8 +20,14 @@ register("list_files", {
     },
   },
   async execute({ pattern, cwd }) {
+    // Use the jail directory as the base if no cwd is provided
+    const baseCwd = cwd || process.cwd();
+    
+    // Resolve the cwd to ensure it's within the jail
+    const resolvedCwd = resolveJailedPath(process.cwd(), baseCwd);
+    
     const matches = await glob(pattern || "*", {
-      cwd: cwd || process.cwd(),
+      cwd: resolvedCwd,
       dot: false,
       ignore: ["node_modules/**", ".git/**"],
     });

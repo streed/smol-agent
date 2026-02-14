@@ -1,5 +1,6 @@
 import { execSync } from "node:child_process";
 import { register } from "./registry.js";
+import { resolveJailedPath } from "../path-utils.js";
 
 register("grep", {
   description:
@@ -25,10 +26,15 @@ register("grep", {
     },
   },
   async execute({ pattern, path: searchPath, include }) {
+    // Resolve the search path against the jail directory
+    const resolvedSearchPath = searchPath 
+      ? resolveJailedPath(process.cwd(), searchPath)
+      : process.cwd();
+      
     const args = ["-rn", "--color=never"];
     if (include) args.push(`--include=${include}`);
     args.push(pattern);
-    args.push(searchPath || ".");
+    args.push(resolvedSearchPath);
     const cmd = `grep ${args.map((a) => JSON.stringify(a)).join(" ")}`;
 
     try {

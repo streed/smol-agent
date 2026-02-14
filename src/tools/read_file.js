@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import { register } from "./registry.js";
+import { resolveJailedPath } from "../path-utils.js";
 
 register("read_file", {
   description:
@@ -22,8 +23,11 @@ register("read_file", {
       },
     },
   },
-  async execute({ path, offset, limit }) {
-    const raw = await fs.readFile(path, "utf-8");
+  async execute({ path: filePath, offset, limit }) {
+    // Resolve the path relative to the current working directory (which should be the jail directory)
+    const resolvedPath = resolveJailedPath(process.cwd(), filePath);
+    
+    const raw = await fs.readFile(resolvedPath, "utf-8");
     let lines = raw.split("\n");
 
     if (offset && offset > 1) {

@@ -1,5 +1,6 @@
 import { execSync } from "node:child_process";
 import { register } from "./registry.js";
+import { resolveJailedPath } from "../path-utils.js";
 
 register("shell", {
   description:
@@ -24,8 +25,14 @@ register("shell", {
   },
   async execute({ command, cwd, timeout }) {
     try {
+      // If a cwd is provided, resolve it against the jail directory
+      // Otherwise, use the jail directory (current working directory)
+      const resolvedCwd = cwd 
+        ? resolveJailedPath(process.cwd(), cwd)
+        : process.cwd();
+      
       const stdout = execSync(command, {
-        cwd: cwd || process.cwd(),
+        cwd: resolvedCwd,
         timeout: timeout || 30_000,
         encoding: "utf-8",
         maxBuffer: 1024 * 1024,
