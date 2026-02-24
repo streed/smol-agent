@@ -10,10 +10,12 @@ const execAsync = promisify(exec);
  * starts every conversation with awareness of the working environment.
  */
 export async function gatherContext(cwd) {
-  // Run all independent context-gathering tasks in parallel
-  const [skills, tree, git, configs, readme] = await Promise.all([
+  // Run all independent context-gathering tasks in parallel.
+  // fileTree uses depth 8 so the full tree is available for caching;
+  // we filter it to 2 levels for the in-context display.
+  const [skills, fullTree, git, configs, readme] = await Promise.all([
     loadSkills(cwd),
-    fileTree(cwd, 2),
+    fileTree(cwd, MAX_MAP_DEPTH),
     gitInfo(cwd),
     readConfigs(cwd, [
       "package.json",
@@ -27,6 +29,16 @@ export async function gatherContext(cwd) {
     readmeSnippet(cwd),
   ]);
 
+  // Persist the full tree to .smol/project-map.json for mid-session reference.
+  // Fire-and-forget — errors are swallowed inside saveProjectMap.
+  saveProjectMap(cwd, fullTree);
+
+  // For the context block only show the top MAX_CONTEXT_DEPTH levels (keeps the prompt concise).
+  const contextTree = fullTree.filter((line) => {
+    const indent = line.length - line.trimStart().length;
+    return indent / INDENT_WIDTH <= MAX_CONTEXT_DEPTH;
+  });
+
   const sections = [];
 
   // 1. Working directory
@@ -38,9 +50,11 @@ export async function gatherContext(cwd) {
     sections.push(`## Agent skills\n${skills.join("\n\n---\n\n")}`);
   }
 
-  // 3. File tree (top 2 levels, ignore noise)
-  if (tree.length > 0) {
-    sections.push(`## Project file tree\n${tree.join("\n")}`);
+  // 3. File tree (top 2 levels; full map cached at .smol/project-map.json)
+  if (contextTree.length > 0) {
+    sections.push(
+      `## Project file tree (top 2 levels — full map at .smol/project-map.json)\n${contextTree.join("\n")}`
+    );
   }
 
   // 4. Git info
@@ -64,6 +78,13 @@ export async function gatherContext(cwd) {
 }
 
 // ── helpers ──────────────────────────────────────────────────────────
+
+// Indentation used by walk() per depth level (must stay in sync with walk()).
+const INDENT_WIDTH = 2;
+// Depth levels shown in the in-context file tree (concise summary).
+const MAX_CONTEXT_DEPTH = 2;
+// Maximum depth walked for the full project map cache.
+const MAX_MAP_DEPTH = 8;
 
 async function fileTree(cwd, maxDepth) {
   const entries = [];
@@ -163,6 +184,25 @@ async function readmeSnippet(cwd) {
     }
   }
   return null;
+}
+
+/**
+ * Persist the full project file tree to .smol/project-map.json.
+ * Written on every startup so the cache is always current.
+ * Errors are swallowed — a missing cache is not fatal.
+ */
+async function saveProjectMap(cwd, tree) {
+  const smolDir = path.join(cwd, ".smol");
+  try {
+    await fs.mkdir(smolDir, { recursive: true });
+    await fs.writeFile(
+      path.join(smolDir, "project-map.json"),
+      JSON.stringify({ generated: new Date().toISOString(), cwd, tree }, null, 2),
+      "utf-8"
+    );
+  } catch {
+    // Failed to write cache — proceed without it
+  }
 }
 
 /**

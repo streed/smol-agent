@@ -137,12 +137,20 @@ The model decides which tools to call and when. It will loop — calling tools a
 When the agent starts (or after `/reset`), it automatically gathers context about the current project and injects it into the system prompt. This gives the model immediate awareness of:
 
 - **Agent skills** — custom instructions from `.smol/skills/` (see below)
-- **Working directory** and **file tree** (top 2 levels, ignoring node_modules/.git/etc.)
+- **Working directory** and **file tree** (top 2 levels in-context; full map cached at `.smol/project-map.json`)
 - **Git status** — current branch, uncommitted changes, and recent commit history
 - **Config files** — package.json, tsconfig.json, pyproject.toml, Cargo.toml, go.mod, Makefile, .env.example (whichever exist)
 - **README excerpt** — first 80 lines of any README file
 
 This means the model already knows your project layout, language, dependencies, and available scripts before you even ask your first question — so it can give better answers with fewer tool calls.
+
+## Project map cache
+
+On every startup (and after `/reset`), smol-agent writes a complete project file tree to `.smol/project-map.json`. This is the full tree — several levels deep — unlike the 2-level summary in the system prompt.
+
+The agent knows about this file and will `read_file .smol/project-map.json` when it needs to navigate deep project structures, avoiding repeated `list_files` calls. The cache is always refreshed at startup so it accurately reflects the current state of the project.
+
+`.smol/project-map.json` is auto-generated and is listed in `.gitignore`. `.smol/skills/` skill files are meant to be committed.
 
 ## Agent skills
 
