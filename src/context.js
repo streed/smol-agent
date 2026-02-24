@@ -11,7 +11,8 @@ const execAsync = promisify(exec);
  */
 export async function gatherContext(cwd) {
   // Run all independent context-gathering tasks in parallel
-  const [tree, git, configs, readme] = await Promise.all([
+  const [skills, tree, git, configs, readme] = await Promise.all([
+    loadSkills(cwd),
     fileTree(cwd, 2),
     gitInfo(cwd),
     readConfigs(cwd, [
@@ -31,24 +32,30 @@ export async function gatherContext(cwd) {
   // 1. Working directory
   sections.push(`## Working directory\n${cwd}`);
 
-  // 2. File tree (top 2 levels, ignore noise)
+  // 2. Agent skills — project-specific instructions that extend agent behavior.
+  //    Placed first so the model prioritizes them.
+  if (skills.length > 0) {
+    sections.push(`## Agent skills\n${skills.join("\n\n---\n\n")}`);
+  }
+
+  // 3. File tree (top 2 levels, ignore noise)
   if (tree.length > 0) {
     sections.push(`## Project file tree\n${tree.join("\n")}`);
   }
 
-  // 3. Git info
+  // 4. Git info
   if (git) {
     sections.push(`## Git status\n${git}`);
   }
 
-  // 4. Key config files
+  // 5. Key config files
   if (configs.length > 0) {
     sections.push(
       `## Project configuration files\n${configs.join("\n---\n")}`
     );
   }
 
-  // 5. README snippet (first 80 lines)
+  // 6. README snippet (first 80 lines)
   if (readme) {
     sections.push(`## README (excerpt)\n${readme}`);
   }
@@ -156,4 +163,41 @@ async function readmeSnippet(cwd) {
     }
   }
   return null;
+}
+
+/**
+ * Load agent skills from .smol/skills/.
+ * Each file in the directory is treated as one skill.
+ * Files are read in alphabetical order and returned as formatted strings.
+ */
+async function loadSkills(cwd) {
+  const skillsDir = path.join(cwd, ".smol", "skills");
+  let entries;
+  try {
+    entries = await fs.readdir(skillsDir, { withFileTypes: true });
+  } catch {
+    return []; // directory doesn't exist — no skills
+  }
+
+  const files = entries
+    .filter((e) => e.isFile())
+    .map((e) => e.name)
+    .sort();
+
+  const results = await Promise.all(
+    files.map(async (name) => {
+      try {
+        const content = await fs.readFile(path.join(skillsDir, name), "utf-8");
+        const trimmed = content.trim();
+        if (!trimmed) return null;
+        // Use filename (without extension) as the skill heading
+        const heading = name.replace(/\.[^.]+$/, "");
+        return `### ${heading}\n${trimmed}`;
+      } catch {
+        return null;
+      }
+    })
+  );
+
+  return results.filter(Boolean);
 }

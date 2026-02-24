@@ -136,12 +136,34 @@ The model decides which tools to call and when. It will loop — calling tools a
 
 When the agent starts (or after `/reset`), it automatically gathers context about the current project and injects it into the system prompt. This gives the model immediate awareness of:
 
+- **Agent skills** — custom instructions from `.smol/skills/` (see below)
 - **Working directory** and **file tree** (top 2 levels, ignoring node_modules/.git/etc.)
 - **Git status** — current branch, uncommitted changes, and recent commit history
 - **Config files** — package.json, tsconfig.json, pyproject.toml, Cargo.toml, go.mod, Makefile, .env.example (whichever exist)
 - **README excerpt** — first 80 lines of any README file
 
 This means the model already knows your project layout, language, dependencies, and available scripts before you even ask your first question — so it can give better answers with fewer tool calls.
+
+## Agent skills
+
+Skills let you define persistent, project-specific instructions that extend the agent's behavior. Place plain-text or Markdown files in `.smol/skills/` and the agent loads them automatically on every startup.
+
+```
+.smol/
+└── skills/
+    ├── always-write-tests.md
+    ├── prefer-typescript.md
+    └── style-guide.md
+```
+
+Each skill file is injected into the system context under its filename (without extension) as the heading. Skills are loaded in alphabetical order and take priority over the default instructions — so they're the right place for:
+
+- Coding style rules specific to your project ("always use single quotes", "no `any` types")
+- Architecture constraints ("all API handlers must return `Result<T, ApiError>`")
+- Workflow preferences ("always run `npm test` after making changes")
+- Domain knowledge the model wouldn't otherwise have
+
+Skills are re-loaded after each `/reset`.
 
 ## Architecture
 
