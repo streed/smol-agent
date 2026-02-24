@@ -1,40 +1,47 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { execSync } from "node:child_process";
+import { exec } from "node:child_process";
+import { promisify } from "node:util";
+
+const execAsync = promisify(exec);
 
 /**
  * Gather project context to inject into the system prompt so the model
  * starts every conversation with awareness of the working environment.
  */
 export async function gatherContext(cwd) {
+  // Run all independent context-gathering tasks in parallel
+  const [tree, git, configs, readme] = await Promise.all([
+    fileTree(cwd, 2),
+    gitInfo(cwd),
+    readConfigs(cwd, [
+      "package.json",
+      "tsconfig.json",
+      "pyproject.toml",
+      "Cargo.toml",
+      "go.mod",
+      "Makefile",
+      ".env.example",
+    ]),
+    readmeSnippet(cwd),
+  ]);
+
   const sections = [];
 
   // 1. Working directory
   sections.push(`## Working directory\n${cwd}`);
 
   // 2. File tree (top 2 levels, ignore noise)
-  const tree = await fileTree(cwd, 2);
   if (tree.length > 0) {
     sections.push(`## Project file tree\n${tree.join("\n")}`);
   }
 
   // 3. Git info
-  const git = gitInfo(cwd);
   if (git) {
     sections.push(`## Git status\n${git}`);
   }
 
-  // 4. Key config files — read small metadata files that help the model
-  //    understand the project language, dependencies, and scripts.
-  const configs = await readConfigs(cwd, [
-    "package.json",
-    "tsconfig.json",
-    "pyproject.toml",
-    "Cargo.toml",
-    "go.mod",
-    "Makefile",
-    ".env.example",
-  ]);
+  // 4. Key config files
   if (configs.length > 0) {
     sections.push(
       `## Project configuration files\n${configs.join("\n---\n")}`
@@ -42,7 +49,6 @@ export async function gatherContext(cwd) {
   }
 
   // 5. README snippet (first 80 lines)
-  const readme = await readmeSnippet(cwd);
   if (readme) {
     sections.push(`## README (excerpt)\n${readme}`);
   }
@@ -94,31 +100,19 @@ async function walk(base, rel, depth, maxDepth, out) {
   }
 }
 
-function gitInfo(cwd) {
+async function gitInfo(cwd) {
   try {
-    const branch = execSync("git rev-parse --abbrev-ref HEAD", {
-      cwd,
-      encoding: "utf-8",
-      timeout: 5000,
-      stdio: ["pipe", "pipe", "pipe"],
-    }).trim();
+    const [branchResult, statusResult, logResult] = await Promise.all([
+      execAsync("git rev-parse --abbrev-ref HEAD", { cwd, timeout: 5000 }),
+      execAsync("git status --short", { cwd, timeout: 5000 }),
+      execAsync("git log --oneline -5", { cwd, timeout: 5000 }).catch(
+        () => ({ stdout: "(no commits)" })
+      ),
+    ]);
 
-    const status = execSync("git status --short", {
-      cwd,
-      encoding: "utf-8",
-      timeout: 5000,
-      stdio: ["pipe", "pipe", "pipe"],
-    }).trim();
-
-    const recentLog = execSync(
-      'git log --oneline -5 2>/dev/null || echo "(no commits)"',
-      {
-        cwd,
-        encoding: "utf-8",
-        timeout: 5000,
-        stdio: ["pipe", "pipe", "pipe"],
-      }
-    ).trim();
+    const branch = branchResult.stdout.trim();
+    const status = statusResult.stdout.trim();
+    const recentLog = logResult.stdout.trim() || "(no commits)";
 
     let out = `Branch: ${branch}`;
     if (status) {
