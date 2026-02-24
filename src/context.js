@@ -206,6 +206,16 @@ async function saveProjectMap(cwd, tree) {
 }
 
 /**
+ * Re-walk the project tree and update .smol/project-map.json.
+ * Called after file-system mutations (write_file, delete_file) so the
+ * cached map stays in sync without waiting for the next startup.
+ */
+export async function refreshProjectMap(cwd) {
+  const tree = await fileTree(cwd, MAX_MAP_DEPTH);
+  await saveProjectMap(cwd, tree);
+}
+
+/**
  * Load agent skills from .smol/skills/.
  * Each file in the directory is treated as one skill.
  * Files are read in alphabetical order and returned as formatted strings.

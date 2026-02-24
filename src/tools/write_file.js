@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { register } from "./registry.js";
+import { refreshProjectMap } from "../context.js";
 
 register("write_file", {
   description:
@@ -22,6 +23,8 @@ register("write_file", {
   async execute({ path: filePath, content }) {
     await fs.mkdir(path.dirname(filePath), { recursive: true });
     await fs.writeFile(filePath, content, "utf-8");
+    // Refresh the project map so the cache reflects the new file.
+    refreshProjectMap(process.cwd());
     return { status: "ok", path: filePath, bytes: Buffer.byteLength(content) };
   },
 });

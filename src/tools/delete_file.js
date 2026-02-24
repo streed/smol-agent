@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import { register } from "./registry.js";
+import { refreshProjectMap } from "../context.js";
 
 register("delete_file", {
   description:
@@ -16,6 +17,8 @@ register("delete_file", {
   },
   async execute({ path }) {
     await fs.unlink(path);
+    // Refresh the project map so the cache no longer lists the deleted file.
+    refreshProjectMap(process.cwd());
     return { status: "ok", path };
   },
 });
