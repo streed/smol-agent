@@ -12,6 +12,7 @@ import "./tools/shell.js";
 import "./tools/grep.js";
 import { setOllamaClient as setSearchClient } from "./tools/web_search.js";
 import { setOllamaClient as setFetchClient } from "./tools/web_fetch.js";
+import "./tools/delete_file.js";
 import "./tools/ask_user.js";
 
 const SYSTEM_PROMPT = `You are smol-agent, an expert coding assistant that runs in the user's terminal. You help users build, debug, refactor, and understand code by combining your knowledge with direct access to their project through tools.
@@ -36,6 +37,7 @@ const SYSTEM_PROMPT = `You are smol-agent, an expert coding assistant that runs 
 - **Prefer \`edit_file\` over \`write_file\`** for modifying existing files. edit_file does a targeted find-and-replace, which is safer than overwriting the whole file.
 - The \`old_string\` in edit_file must match the file contents **exactly**, including indentation and whitespace. Copy it precisely from the read_file output (without the line numbers).
 - Use \`write_file\` only when creating new files or when the entire file needs to be rewritten.
+- Use \`delete_file\` to remove a file. Always use \`ask_user\` to confirm before deleting unless the user has already explicitly requested the deletion.
 - Preserve the existing code style — indentation (tabs vs spaces), quote style, trailing commas, etc. Match what's already there.
 - Do not add unrelated changes. If you are asked to fix a bug, fix that bug — don't also refactor surrounding code or add comments.
 

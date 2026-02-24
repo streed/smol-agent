@@ -1,5 +1,8 @@
-import { execSync } from "node:child_process";
+import { exec } from "node:child_process";
+import { promisify } from "node:util";
 import { register } from "./registry.js";
+
+const execAsync = promisify(exec);
 
 register("grep", {
   description:
@@ -32,16 +35,14 @@ register("grep", {
     const cmd = `grep ${args.map((a) => JSON.stringify(a)).join(" ")}`;
 
     try {
-      const stdout = execSync(cmd, {
-        encoding: "utf-8",
+      const { stdout } = await execAsync(cmd, {
         timeout: 15_000,
         maxBuffer: 512 * 1024,
-        stdio: ["pipe", "pipe", "pipe"],
       });
       const lines = stdout.trim().split("\n");
       return { matches: lines.slice(0, 200) };
     } catch (err) {
-      if (err.status === 1) {
+      if (err.code === 1) {
         return { matches: [] }; // no matches
       }
       return { error: (err.stderr || err.message).trim() };

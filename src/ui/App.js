@@ -38,13 +38,20 @@ export default function App({ agent, initialPrompt }) {
     const onToolResult = () => {
       setStatusText("");
     };
+    const onError = (err) => {
+      setLog((prev) => [...prev, { role: "error", text: err.message }]);
+      setBusy(false);
+      setStatusText("");
+    };
 
     agent.on("tool_call", onToolCall);
     agent.on("tool_result", onToolResult);
+    agent.on("error", onError);
 
     return () => {
       agent.off("tool_call", onToolCall);
       agent.off("tool_result", onToolResult);
+      agent.off("error", onError);
     };
   }, [agent]);
 
@@ -61,6 +68,16 @@ export default function App({ agent, initialPrompt }) {
         setLog((prev) => [
           ...prev,
           { role: "tool", text: "(conversation reset)" },
+        ]);
+        return;
+      }
+      if (text.trim() === "/help") {
+        setLog((prev) => [
+          ...prev,
+          {
+            role: "tool",
+            text: "Commands: /reset — clear conversation  |  exit/quit — exit  |  Ctrl-C — exit",
+          },
         ]);
         return;
       }

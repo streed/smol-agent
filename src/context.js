@@ -134,19 +134,20 @@ function gitInfo(cwd) {
 }
 
 async function readConfigs(cwd, filenames) {
-  const results = [];
-  for (const name of filenames) {
-    try {
-      const content = await fs.readFile(path.join(cwd, name), "utf-8");
-      // Truncate very large config files
-      const trimmed =
-        content.length > 2000 ? content.slice(0, 2000) + "\n...(truncated)" : content;
-      results.push(`### ${name}\n\`\`\`\n${trimmed.trim()}\n\`\`\``);
-    } catch {
-      // file doesn't exist — skip
-    }
-  }
-  return results;
+  const results = await Promise.all(
+    filenames.map(async (name) => {
+      try {
+        const content = await fs.readFile(path.join(cwd, name), "utf-8");
+        // Truncate very large config files
+        const trimmed =
+          content.length > 2000 ? content.slice(0, 2000) + "\n...(truncated)" : content;
+        return `### ${name}\n\`\`\`\n${trimmed.trim()}\n\`\`\``;
+      } catch {
+        return null; // file doesn't exist — skip
+      }
+    })
+  );
+  return results.filter(Boolean);
 }
 
 async function readmeSnippet(cwd) {

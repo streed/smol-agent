@@ -1,5 +1,8 @@
-import { execSync } from "node:child_process";
+import { exec } from "node:child_process";
+import { promisify } from "node:util";
 import { register } from "./registry.js";
+
+const execAsync = promisify(exec);
 
 register("shell", {
   description:
@@ -24,17 +27,15 @@ register("shell", {
   },
   async execute({ command, cwd, timeout }) {
     try {
-      const stdout = execSync(command, {
+      const { stdout } = await execAsync(command, {
         cwd: cwd || process.cwd(),
         timeout: timeout || 30_000,
-        encoding: "utf-8",
         maxBuffer: 1024 * 1024,
-        stdio: ["pipe", "pipe", "pipe"],
       });
       return { stdout: stdout.trim() };
     } catch (err) {
       return {
-        exit_code: err.status,
+        exit_code: err.code,
         stdout: (err.stdout || "").trim(),
         stderr: (err.stderr || "").trim(),
       };

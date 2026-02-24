@@ -108,6 +108,7 @@ smol-agent "add input validation to src/api.js"
 | Command | Description |
 |---------|-------------|
 | `/reset` | Clear conversation history |
+| `/help` | Show available commands |
 | `exit` / `quit` | Exit the agent |
 | `Ctrl-C` | Exit the agent |
 
@@ -120,6 +121,7 @@ The agent has access to the following tools:
 | `read_file` | Read file contents with optional line offset/limit |
 | `write_file` | Create or overwrite files (creates parent directories) |
 | `edit_file` | Find-and-replace editing within a file |
+| `delete_file` | Delete a file |
 | `list_files` | Glob-based file and directory listing |
 | `shell` | Execute shell commands (builds, tests, git, etc.) |
 | `grep` | Regex search across files with line numbers |
@@ -155,6 +157,7 @@ src/
     ├── read_file.js      Read file contents
     ├── write_file.js     Write/create files
     ├── edit_file.js      Find-and-replace editing
+    ├── delete_file.js    Delete a file
     ├── list_files.js     Glob-based file listing
     ├── shell.js          Shell command execution
     ├── grep.js           Regex search across files
