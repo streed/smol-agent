@@ -6,7 +6,7 @@ import { setAskHandler } from "../tools/ask_user.js";
 
 const e = React.createElement;
 
-export default function App({ agent, initialPrompt }) {
+export default function App({ agent, initialPrompt, autoApprove }) {
   const { exit } = useApp();
 
   const [log, setLog] = useState([]);
@@ -143,7 +143,8 @@ export default function App({ agent, initialPrompt }) {
       Box,
       { marginBottom: 1 },
       e(Text, { bold: true, color: "cyan" }, "smol-agent"),
-      e(Text, { dimColor: true }, ` (model: ${agent.model})`)
+      e(Text, { dimColor: true }, ` (model: ${agent.model})`),
+      autoApprove && e(Text, { color: "yellow" }, " [--yes]")
     ),
 
     // Message log

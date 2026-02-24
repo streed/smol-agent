@@ -101,6 +101,7 @@ smol-agent "add input validation to src/api.js"
 |------|-------------|
 | `-m, --model <name>` | Ollama model to use (default: `qwen2.5-coder:7b`) |
 | `-H, --host <url>` | Ollama server URL (default: `http://127.0.0.1:11434`) |
+| `-y, --yes` | Auto-approve all shell commands (skip permission prompts) |
 | `--help` | Show help |
 
 ### Commands (interactive mode)

@@ -14,6 +14,17 @@ export function setAskHandler(handler) {
   _askHandler = handler;
 }
 
+/**
+ * Ask the user a yes/no question and return true if they answered yes.
+ * Used internally by other tools (e.g. shell) to request one-time approval.
+ * If no UI handler is registered, defaults to true (non-interactive mode).
+ */
+export async function requestPermission(question) {
+  if (!_askHandler) return true;
+  const answer = await _askHandler(question);
+  return /^y(es)?$/i.test(answer.trim());
+}
+
 register("ask_user", {
   description:
     "Ask the user a question and wait for their response. Use this when you need clarification, want to confirm a destructive action, or need the user to choose between options.",

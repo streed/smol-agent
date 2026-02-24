@@ -8,7 +8,7 @@ import "./tools/read_file.js";
 import "./tools/write_file.js";
 import "./tools/edit_file.js";
 import "./tools/list_files.js";
-import "./tools/shell.js";
+import { setAutoApprove, resetApproval } from "./tools/shell.js";
 import "./tools/grep.js";
 import { setOllamaClient as setSearchClient } from "./tools/web_search.js";
 import { setOllamaClient as setFetchClient } from "./tools/web_fetch.js";
@@ -73,7 +73,7 @@ const SYSTEM_PROMPT = `You are smol-agent, an expert coding assistant that runs 
 - If you are unsure about something, ask rather than guess.`;
 
 export class Agent extends EventEmitter {
-  constructor({ host, model } = {}) {
+  constructor({ host, model, autoApprove } = {}) {
     super();
     this.client = ollama.createClient(host);
     this.model = model || ollama.DEFAULT_MODEL;
@@ -84,6 +84,10 @@ export class Agent extends EventEmitter {
     // Give the web tools access to the Ollama client
     setSearchClient(this.client);
     setFetchClient(this.client);
+
+    if (autoApprove) {
+      setAutoApprove(true);
+    }
   }
 
   /**
@@ -184,5 +188,6 @@ export class Agent extends EventEmitter {
   reset() {
     this.messages = [];
     this._initialized = false;
+    resetApproval();
   }
 }
