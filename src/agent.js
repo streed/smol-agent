@@ -18,6 +18,9 @@ import { setOllamaClient as setFetchClient } from "./tools/web_fetch.js";
 import "./tools/ask_user.js";
 import "./tools/plan_tools.js";
 import "./tools/requirements_tools.js";
+import "./tools/reflection.js";
+import "./tools/create_tool.js";
+import { loadCustomTools } from "./tools/create_tool.js";
 
 /**
  * Attempt to extract tool calls from the assistant's text content.
@@ -277,6 +280,9 @@ export class Agent extends EventEmitter {
     this.maxTokens = 128000; // Default for most models
     this.targetTokenThreshold = this.maxTokens * 0.95; // Summarize at 95%
     
+    // Reflection settings
+    this.enableReflection = true; // Enable reflection after tasks
+    
     // Give the web tools access to the Ollama client
     setSearchClient(this.client);
     setFetchClient(this.client);
@@ -384,6 +390,14 @@ export class Agent extends EventEmitter {
 
     this.messages = [{ role: "system", content: systemContent }];
     this._initialized = true;
+    
+    // Load custom tools from .smol-agent/tools/
+    try {
+      await loadCustomTools();
+    } catch (err) {
+      console.warn("Failed to load custom tools:", err.message);
+    }
+    
     this.emit("context_ready");
   }
 
@@ -415,6 +429,10 @@ export class Agent extends EventEmitter {
    *   "error"         — Error                     on failure
    */
   async run(userMessage) {
+    // Store task info for reflection
+    const taskDescription = userMessage;
+    const allToolCalls = [];
+    
     await this._init();
     
     // Log initial token usage
@@ -517,6 +535,11 @@ export class Agent extends EventEmitter {
           const content = msg.content || "(no response)";
           this.emit("response", { content });
           
+          // Run reflection after task completion
+          if (this.mode === "coding" && this.enableReflection) {
+            await this._runReflection(taskDescription, allToolCalls, content);
+          }
+          
           // If we auto-switched to preplan and the agent has saved a plan, return to coding mode
           if (wasAutoSwitched) {
             try {
@@ -537,6 +560,9 @@ export class Agent extends EventEmitter {
         for (const toolCall of toolCalls) {
           const name = toolCall.function.name;
           const args = toolCall.function.arguments;
+
+          // Track for reflection
+          allToolCalls.push({ name, args });
 
           this.emit("tool_call", { name, args });
 
@@ -582,6 +608,73 @@ export class Agent extends EventEmitter {
     }
   }
 
+  /**
+   * Run reflection on the completed task
+   */
+  async _runReflection(taskDescription, toolCalls, finalResponse) {
+    if (!this.enableReflection) return null;
+    
+    const toolSummary = toolCalls.map(tc => tc.name).join(", ") || "none";
+    const reflectionPrompt = `
+
+## Task Completion Reflection
+
+Task: "${taskDescription}"
+Tools used: ${toolSummary}
+
+After completing this task, please reflect on what was done using the \`reflect\` tool. You can also set askUserFeedback to true to ask for feedback.`;
+
+    this.messages.push({ role: "user", content: reflectionPrompt });
+    
+    const planningMode = this.mode === "planning";
+    const preplanMode = this.mode === "preplan";
+    const tools = registry.ollamaTools(planningMode, preplanMode, IS_CHILD_AGENT);
+    
+    try {
+      const response = await ollama.chatWithRetry(
+        this.client,
+        this.model,
+        this.messages,
+        tools,
+        this.abortController?.signal,
+        this.maxTokens
+      );
+      
+      const msg = response.message;
+      this.messages.push(msg);
+      
+      let calledTools = msg.tool_calls && msg.tool_calls.length > 0
+        ? msg.tool_calls
+        : parseToolCallsFromContent(msg.content);
+      
+      for (const tc of calledTools) {
+        const name = tc.function.name;
+        const args = tc.function.arguments;
+        
+        this.emit("tool_call", { name, args });
+        const result = await registry.execute(name, args);
+        this.emit("tool_result", { name, result });
+        
+        this.messages.push({ role: "tool", content: JSON.stringify(result) });
+        
+        // If reflect tool was called, emit its result as the reflection
+        if (name === "reflect" && result?.reflection) {
+          this.emit("reflection", { content: result.reflection });
+          msg.content = result.reflection; // Update msg.content for return value
+        }
+      }
+      
+      if (msg.content) {
+        this.emit("reflection", { content: msg.content });
+      }
+      
+      return msg.content || "";
+    } catch (err) {
+      console.warn("Reflection failed:", err.message);
+      return null;
+    }
+  }
+
   /** Cancel the current operation if one is running */
   cancel() {
     if (this.running && this.abortController) {
@@ -597,5 +690,10 @@ export class Agent extends EventEmitter {
     if (this.contextTracker) {
       this.contextTracker.resetFileTracking();
     }
+  }
+  
+  /** Enable or disable reflection after tasks */
+  setReflection(enabled) {
+    this.enableReflection = enabled;
   }
 }

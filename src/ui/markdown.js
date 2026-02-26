@@ -125,11 +125,13 @@ function processMarkdown(text) {
       continue;
     }
     
+    // Paragraph handling - trim leading whitespace from each line
     const paragraphLines = [];
     while (i < lines.length && lines[i].trim()) {
       const l = lines[i];
       if (l.startsWith('```') || l.startsWith('~~~') || l.match(/^#{1,6}\s/) || l.match(/^(\s*)[-*]\s+/) || l.match(/^(\s*)\d+\.\s+/) || l.match(/^\|.+\|$/) || l.match(/^[-_]{3,}$/) || l.startsWith('>')) break;
-      paragraphLines.push(l);
+      // Trim leading whitespace to handle indented paragraphs
+      paragraphLines.push(l.trim());
       i++;
     }
     
@@ -163,7 +165,9 @@ function renderTable(tableLines, key) {
 
 function processInlineFormatting(text) {
   if (!text) return [e(Text, null, "")];
-  const segments = splitIntoSegments(text);
+  // First, normalize whitespace: collapse multiple spaces into single space
+  const normalized = text.replace(/\s+/g, ' ').trim();
+  const segments = splitIntoSegments(normalized);
   const elements = [];
   segments.forEach((seg, idx) => {
     if (seg.type === 'text') elements.push(e(Text, { key: idx }, seg.content));
@@ -188,7 +192,7 @@ function splitIntoSegments(text) {
     m = remaining.match(/\*\*([^*]+)\*\*/); if (m) matches.push({ type: 'bold', index: m.index, length: m[0].length, content: m[1] });
     m = remaining.match(/~~([^~]+)~~/); if (m) matches.push({ type: 'strikethrough', index: m.index, length: m[0].length, content: m[1] });
     m = remaining.match(/`([^`]+)`/); if (m) matches.push({ type: 'code', index: m.index, length: m[0].length, content: m[1] });
-    m = remaining.match(/(?<!\*)\*([^*]+)\*(?!\*)|_([^_]+)_/); if (m) { const isA = m[0].startsWith('*'); const c = isA ? m[1] : m[2]; if (c) matches.push({ type: 'italic', index: m.index, length: m[0].length, content: c }); }
+    m = remaining.match(/(?<!\*)\*([^*]+)\*(?!\*)|(?<!_)_([^_]+)_(?!_)/); if (m) { const isA = m[0].startsWith('*'); const c = isA ? m[1] : m[2]; if (c) matches.push({ type: 'italic', index: m.index, length: m[0].length, content: c }); }
     if (matches.length === 0) { segments.push({ type: 'text', content: remaining }); break; }
     matches.sort((a, b) => a.index - b.index);
     const fm = matches[0];

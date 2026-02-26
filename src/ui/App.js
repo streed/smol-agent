@@ -170,6 +170,15 @@ export default function App({ agent, initialPrompt }) {
     const onResponse = ({ content }) => {
       // This is handled in the submit function, but we could log it here too if needed
     };
+    const onReflection = ({ content }) => {
+      if (content) {
+        setLog((prev) => [
+          ...prev,
+          { role: "reflection", text: content },
+        ]);
+      }
+    };
+    
     const onError = (error) => {
       setLog((prev) => [...prev, { role: "error", text: error.message }]);
     };
@@ -180,6 +189,7 @@ export default function App({ agent, initialPrompt }) {
     agent.on("context_ready", onContextReady);
     agent.on("response", onResponse);
     agent.on("error", onError);
+    agent.on("reflection", onReflection);
 
     return () => {
       agent.off("tool_call", onToolCall);
@@ -188,6 +198,7 @@ export default function App({ agent, initialPrompt }) {
       agent.off("context_ready", onContextReady);
       agent.off("response", onResponse);
       agent.off("error", onError);
+      agent.off("reflection", onReflection);
     };
   }, [agent]);
 
@@ -477,6 +488,16 @@ export default function App({ agent, initialPrompt }) {
       if (entry.role === "tool") {
         return [
           e(Text, { dimColor: true }, "    ⎿  " + (entry.text || ""))
+        ];
+      }
+      if (entry.role === "reflection") {
+        return [
+          e(Box, { marginTop: 1 },
+            e(Text, { color: "magenta", dimColor: true }, " ↺  reflection:"),
+          ),
+          e(Box, { marginLeft: 4 },
+            e(Markdown, null, entry.text || "")
+          ),
         ];
       }
       if (entry.role === "error") {

@@ -157,6 +157,53 @@ Each agent's state is persisted in `.smol-agent/state/<agent_id>.json`:
 - **Progress tracking**: Parent sees real-time progress from all children
 - **Error isolation**: Child failures don't necessarily crash parent
 
+## Self-Generated Tools
+
+smol-agent supports creating custom tools that persist across sessions. Tools are stored in `.smol-agent/tools/`.
+
+### Tool Management Tools
+
+| Tool | Purpose |
+|------|---------|
+| `create_tool` | Create a new custom tool |
+| `list_custom_tools` | List all available custom tools |
+| `get_tool_code` | View source code of a custom tool |
+| `delete_tool` | Delete a custom tool |
+
+### Creating a Tool
+
+Use `create_tool` with:
+- `name`: Tool name (snake_case)
+- `description`:
+- `parameters What the tool does`: JSON Schema for arguments
+- `code`: JavaScript code to execute
+
+Example:
+```
+create_tool({
+  name: "calculate_hash",
+  description: "Calculate SHA-256 hash of a string",
+  parameters: {
+    type: "object",
+    properties: {
+      input: { type: "string", description: "String to hash" }
+    },
+    required: ["input"]
+  },
+  code: "const crypto = require('crypto'); return crypto.createHash('sha256').update(input).digest('hex');"
+})
+```
+
+### Reflection
+
+After completing a task, the agent can reflect on what was done:
+
+| Tool | Purpose |
+|------|---------|
+| `reflect` | Summarize work, identify what went well, areas for improvement |
+
+The reflection is automatically triggered after each task completes (in coding mode). Use `agent.setReflection(false)` to disable.
+
 ## Planning mode
 
 The agent supports two modes:
