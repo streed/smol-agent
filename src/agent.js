@@ -3,7 +3,7 @@ import * as ollama from "./ollama.js";
 import * as registry from "./tools/registry.js";
 import { gatherContext } from "./context.js";
 import { logger } from "./logger.js";
-import { estimateTokenCount } from "./conversation-summarizer.js";
+import { ContextManager } from "./context-manager.js";
 
 // Import all tools so they self-register
 import "./tools/run_command.js";
@@ -15,8 +15,6 @@ import { setOllamaClient as setFetchClient } from "./tools/web_fetch.js";
 import "./tools/ask_user.js";
 import "./tools/plan_tools.js";
 import "./tools/reflection.js";
-import "./tools/create_tool.js";
-import { loadCustomTools } from "./tools/create_tool.js";
 
 /**
  * Attempt to extract tool calls from the assistant's text content.
@@ -160,31 +158,20 @@ export class Agent extends EventEmitter {
     this.running = false;
     this._initialized = false;
     this.abortController = null;
-    this.readOnly = false;
     // When true, only expose ~7 core tools to the model (better for <30B models).
     // When false, expose all tools (fine for 30B+ models).
     this.coreToolsOnly = coreToolsOnly ?? true;
 
-    // Token tracking — real counts from API when available
-    this.lastPromptTokens = 0;
-    this.maxTokens = 128000;
+    // Context management
+    this.contextManager = new ContextManager(128000);
 
     setSearchClient(this.client);
     setFetchClient(this.client);
   }
 
-  /** Toggle read-only mode (blocks write tools). */
-  setReadOnly(enabled) {
-    this.readOnly = !!enabled;
-    return this.readOnly;
-  }
-
   /** Get current token usage info. */
   getTokenInfo() {
-    // Prefer real API counts; fall back to estimate
-    const used = this.lastPromptTokens || estimateTokenCount(this.messages);
-    const pct = Math.round((used / this.maxTokens) * 100);
-    return { used, max: this.maxTokens, percentage: pct };
+    return this.contextManager.getUsage(this.messages);
   }
 
   /**
@@ -212,10 +199,6 @@ export class Agent extends EventEmitter {
     this.messages = [{ role: "system", content: systemContent }];
     this._initialized = true;
 
-    try { await loadCustomTools(); } catch (err) {
-      console.warn("Failed to load custom tools:", err.message);
-    }
-
     this.emit("context_ready");
   }
 
@@ -237,19 +220,20 @@ export class Agent extends EventEmitter {
   async run(userMessage) {
     await this._init();
 
-    // Prune conversation if approaching limit
-    const usage = this.lastPromptTokens || estimateTokenCount(this.messages);
-    if (usage > this.maxTokens * 0.80) {
-      logger.warn(`Pruning conversation: ~${usage} tokens`);
-      const keep = Math.max(6, Math.floor(this.messages.length * 0.3));
-      this.messages = [this.messages[0], ...this.messages.slice(-keep)];
+    // Check and prune conversation if approaching limit
+    const status = this.contextManager.getStatus(this.messages);
+    if (status.shouldPrune) {
+      logger.warn(`Context at ${status.usage.percentage}% - pruning conversation`);
+      const result = this.contextManager.pruneMessages(this.messages);
+      this.messages = result.messages;
+      this.emit("token_usage", this.getTokenInfo());
     }
 
     this.running = true;
     this.abortController = new AbortController();
     this.messages.push({ role: "user", content: userMessage });
 
-    const tools = registry.ollamaTools(this.readOnly, this.coreToolsOnly);
+    const tools = registry.ollamaTools(this.coreToolsOnly);
     let iterations = 0;
 
     try {
@@ -273,8 +257,10 @@ export class Agent extends EventEmitter {
           } else if (event.type === "done") {
             toolCalls = event.toolCalls || [];
             if (event.tokenUsage) {
-              this.lastPromptTokens =
-                event.tokenUsage.promptTokens + event.tokenUsage.completionTokens;
+              this.contextManager.updateFromAPI(
+                event.tokenUsage.promptTokens,
+                event.tokenUsage.completionTokens
+              );
             }
           }
         }
@@ -326,7 +312,11 @@ export class Agent extends EventEmitter {
               return { error: "Operation cancelled" };
             }
 
-            const result = await registry.execute(name, args);
+            let result = await registry.execute(name, args);
+            
+            // Truncate large tool results to prevent context bloat
+            result = this.contextManager.truncateToolResult(result);
+            
             this.emit("tool_result", { name, result });
             return result;
           }),
@@ -353,6 +343,17 @@ export class Agent extends EventEmitter {
         return "(Operation cancelled)";
       }
 
+      // Handle context overflow errors
+      if (ContextManager.isContextOverflowError(err)) {
+        logger.error("Context overflow error from Ollama API");
+        const result = this.contextManager.pruneMessages(this.messages, { aggressive: true });
+        this.messages = result.messages;
+        this.emit("error", new Error(
+          "Context limit exceeded. Conversation has been pruned. Please try your request again."
+        ));
+        return "(Context limit exceeded - conversation pruned. Please retry.)";
+      }
+
       this.emit("error", err);
       throw err;
     }
@@ -369,7 +370,7 @@ export class Agent extends EventEmitter {
   reset() {
     this.messages = [];
     this._initialized = false;
-    this.lastPromptTokens = 0;
+    this.contextManager.reset();
   }
 
   /** Get the current project context as a string. */

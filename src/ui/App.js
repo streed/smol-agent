@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { Box, Text, useApp, useInput, useStdout } from "ink";
-import TextInput from "ink-text-input";
+import { MultilineInput, useMultilineInput } from "./MultilineInput.js";
 import Spinner from "ink-spinner";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -117,7 +117,6 @@ export default function App({ agent, initialPrompt }) {
   const [busy, setBusy] = useState(false);
   const [statusText, setStatusText] = useState("");
   const [askState, setAskState] = useState(null);
-  const [readOnly, setReadOnly] = useState(agent.readOnly);
   const [tokenUsage, setTokenUsage] = useState(null);
 
   // Streaming state
@@ -131,6 +130,17 @@ export default function App({ agent, initialPrompt }) {
 
   const { stdout } = useStdout();
 
+  // Track terminal columns for responsive layout on resize
+  const [columns, setColumns] = useState(stdout?.columns || 80);
+  useEffect(() => {
+    const onResize = () => setColumns(stdout?.columns || 80);
+    stdout?.on("resize", onResize);
+    return () => stdout?.off("resize", onResize);
+  }, [stdout]);
+
+  // Multiline input state
+  const { cursorOffset, handleInput: handleMultilineInput } = useMultilineInput(input, setInput);
+  
   // Wire up ask_user handler
   useEffect(() => {
     setAskHandler((question) =>
@@ -259,15 +269,6 @@ export default function App({ agent, initialPrompt }) {
         setLog((prev) => [...prev, { role: "tool", text: "(conversation reset)" }]);
         return;
       }
-      if (text.trim() === "/readonly" || text.trim() === "/ro") {
-        const newVal = agent.setReadOnly(!agent.readOnly);
-        setReadOnly(newVal);
-        setLog((prev) => [
-          ...prev,
-          { role: "tool", text: newVal ? "(read-only mode ON — write tools disabled)" : "(read-only mode OFF — full access)" },
-        ]);
-        return;
-      }
       if (text.trim() === "/inspect") {
         try {
           const context = await agent.getContext();
@@ -326,6 +327,7 @@ export default function App({ agent, initialPrompt }) {
   busyRef.current = busy;
 
   const inputHandler = useCallback((ch, key) => {
+    // Handle Ctrl+C for exit/cancel
     if (key.ctrl && ch === "c") {
       const now = Date.now();
       if (now - lastCtrlC.current < 500) { exit(); }
@@ -334,26 +336,34 @@ export default function App({ agent, initialPrompt }) {
           agent.cancel();
           streamRef.current = "";
           setStreamDisplay("");
-          setLog((prev) => [...prev, { role: "tool", text: "(operation cancelled)" }]);
+          setLog((prev) => [...prev, { role: "tool", text: "(operation cancelled — press Ctrl+C again to quit)" }]);
           setBusy(false);
           setStatusText("");
+        } else {
+          setLog((prev) => [...prev, { role: "tool", text: "(press Ctrl+C again to quit)" }]);
         }
         lastCtrlC.current = now;
       }
+      return;
     }
-    if (key.shift && key.name === "tab") {
-      const newVal = agent.setReadOnly(!agent.readOnly);
-      setReadOnly(newVal);
-      setLog((prev) => [
-        ...prev,
-        { role: "tool", text: newVal ? "(read-only ON)" : "(read-only OFF)" },
-      ]);
+    
+    // When not busy, handle text input (works in both normal and ask modes)
+    if (!busy) {
+      const handled = handleMultilineInput(ch, key);
+      if (handled) return;
+
+      // Enter submits (multiline handler already consumed Shift+Enter / Ctrl+J)
+      if (key.return) {
+        handleSubmit(input);
+        return;
+      }
     }
-  }, [agent, exit]);
+  }, [agent, exit, busy, input, handleMultilineInput, handleSubmit]);
 
   useInput(inputHandler);
 
-  const contentWidth = (stdout?.columns || 80) - 4;
+  const contentWidth = columns - 4;
+  const boxWidth = contentWidth + 2; // full border-to-border width (matches header)
 
   // Header
   const headerTitle = " ◉ smol-agent ";
@@ -395,7 +405,6 @@ export default function App({ agent, initialPrompt }) {
       e(Text, { dimColor: true }, "│  "),
       e(Text, { color: "magenta" }, agent.model),
       e(Box, { flexGrow: 1 }),
-      readOnly && e(Text, { color: "yellow" }, "▣ read-only  "),
       tokenUsage && e(Text, {
         color: tokenUsage.percentage > 90 ? "red" : tokenUsage.percentage > 75 ? "yellow" : undefined,
         dimColor: tokenUsage.percentage <= 75,
@@ -425,8 +434,10 @@ export default function App({ agent, initialPrompt }) {
         const rest = lines.slice(1).join("\n").trim();
         const result = [
           e(Box, { marginTop: 1 },
-            e(Text, { color: "cyan", bold: true }, " ⏺  "),
-            e(Text, null, first),
+            e(Text, null,
+              e(Text, { color: "cyan", bold: true }, " \u23FA  "),
+              first,
+            ),
           ),
         ];
         if (rest) {
@@ -452,9 +463,11 @@ export default function App({ agent, initialPrompt }) {
     // ── Streaming content ──
     streamDisplay &&
       e(Box, { marginTop: 1 },
-        e(Text, { color: "cyan", bold: true }, " ⏺  "),
-        e(Text, null, streamDisplay),
-        e(Text, { color: "cyan" }, "▋"),
+        e(Text, null,
+          e(Text, { color: "cyan", bold: true }, " \u23FA  "),
+          streamDisplay,
+          e(Text, { color: "cyan" }, "\u258B"),
+        ),
       ),
 
     // ── Spinner ──
@@ -473,16 +486,18 @@ export default function App({ agent, initialPrompt }) {
 
     // ── Input ──
     e(Box, { marginTop: 1 },
-      e(Text, { color: "green", bold: true }, " > "),
-      e(TextInput, { value: input, onChange: setInput, onSubmit: handleSubmit }),
+      e(MultilineInput, {
+        value: input,
+        cursorOffset: cursorOffset,
+        focus: !busy,
+        width: boxWidth,
+      }),
     ),
 
     // ── Status line ──
     e(Box, { marginTop: 0 },
       e(Text, { dimColor: true }, "  "),
-      readOnly
-        ? e(Text, { color: "yellow", bold: true }, "read-only")
-        : e(Text, { color: "green", bold: true }, "coding"),
+      e(Text, { color: "green", bold: true }, "coding"),
       (() => {
         const toolCalls = log.filter((x) => x.role === "tool" && x.text?.startsWith("[tool]")).length;
         const turns = log.filter((x) => x.role === "user").length;
@@ -495,7 +510,7 @@ export default function App({ agent, initialPrompt }) {
           : null;
       })(),
       e(Box, { flexGrow: 1 }),
-      e(Text, { dimColor: true }, "shift+tab readonly · /reset · /inspect · exit "),
+      e(Text, { dimColor: true }, "ctrl+j newline · /reset · exit "),
     ),
   );
 }

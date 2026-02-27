@@ -1,3 +1,44 @@
+Working directory: /home/reed/code/personal/small-coding-agent
+
+Project: Node.js
+
+Files:
+AGENT.md
+CONTEXT.md
+package-lock.json
+package.json
+README.md
+src/
+  agent.js
+  context.js
+  conversation-summarizer.js
+  index.js
+  logger.js
+  ollama.js
+  path-utils.js
+  plan-tracker.js
+  tools/
+  ui/
+test/
+  markdown-improved-test.js
+  markdown-test.js
+
+Git branch: main
+Uncommitted changes (12 files):
+M AGENT.md
+ M package-lock.json
+ M package.json
+ M src/agent.js
+ D src/context-tracker.js
+ M src/conversation-summarizer.js
+ D src/repo-map.js
+ D src/tools/create_tool.js
+ D src/tools/requirements_tools.js
+ M src/ui/App.js
+?? CONTEXT.md
+?? src/ui/MultilineInput.js
+
+## AGENT.md
 # AGENT.md — Agent Navigation Guide
 
 ## What this project is
@@ -30,10 +71,9 @@ The agent is an EventEmitter that drives a loop: send messages to Ollama, check 
 | File | Lines | Purpose |
 |------|-------|---------|
 | `index.js` | 49 | CLI entry point. Parses `--model`, `--host`, `--help` args. Creates `Agent`, renders Ink `App`. |
-| `agent.js` | 379 | **Core agent loop.** `Agent` class (extends EventEmitter). Holds conversation `messages[]`, calls Ollama, processes tool calls in a loop. Contains the system prompt. Also has `parseToolCallsFromContent()` fallback for models that emit tool calls as JSON in text instead of using Ollama's native `tool_calls` field. |
-| `context.js` | 126 | **Project context gathering.** `gatherContext(cwd)` builds a string with: working directory, file tree (2 levels), git branch/status/log, config file contents (package.json, tsconfig, etc.), and README excerpt. Injected into the system prompt on first `run()`. |
-| `context-manager.js` | 270 | **Context window management.** Tracks token usage, prunes conversation history when approaching limits, truncates large tool results, and handles context overflow errors from Ollama. |
-| `ollama.js` | 280 | Ollama API wrapper with streaming, rate limiting, and retry logic. Exports `createClient(host)`, `chatStream()`, `chatWithRetry()`, and `DEFAULT_MODEL`. |
+| `agent.js` | 234 | **Core agent loop.** `Agent` class (extends EventEmitter). Holds conversation `messages[]`, calls Ollama, processes tool calls in a loop. Contains the system prompt. Also has `parseToolCallsFromContent()` fallback for models that emit tool calls as JSON in text instead of using Ollama's native `tool_calls` field. |
+| `context.js` | 164 | **Project context gathering.** `gatherContext(cwd)` builds a string with: working directory, file tree (2 levels), git branch/status/log, config file contents (package.json, tsconfig, etc.), and README excerpt. Injected into the system prompt on first `run()`. |
+| `ollama.js` | 20 | Thin wrapper. Exports `createClient(host)`, `chat(client, model, messages, tools)`, and `DEFAULT_MODEL` (`qwen2.5-coder:7b`). |
 
 ### UI (src/ui/)
 
@@ -67,31 +107,9 @@ This project uses **ES modules** (`"type": "module"` in package.json). **Never u
 
 The agent has a `reflect` tool that can summarize work done, identify what went well, and note areas for improvement. The model can call this tool when it wants to reflect on its work.
 
-## Context management
-
-The agent manages context window usage to prevent overflow errors from Ollama:
-
-### Thresholds
-
-- **70% usage**: Start pruning old messages
-- **85% usage**: Aggressive pruning
-- **Tool result limit**: 15k characters (prevents context bloat)
-
-### Features
-
-- **Proactive pruning**: Removes old messages before hitting limits, keeping system prompt + recent conversation
-- **Tool result truncation**: Large outputs (e.g., from `read_file` or `run_command`) are automatically truncated
-- **Error recovery**: If Ollama returns a context overflow error, the agent prunes aggressively and informs the user to retry
-- **Token tracking**: Uses real token counts from Ollama API when available, falls back to estimation
-
-### Implementation
-
-- `ContextManager` class in `context-manager.js` handles all context window logic
-- `Agent.getTokenInfo()` returns current usage: `{ used, max, percentage, remaining }`
-- UI displays percentage in status bar (yellow > 75%, red > 90%)
-
 ## Read-only mode
 
 The agent has a read-only mode that blocks write tools (`write_file`, `replace_in_file`, `run_command`). Toggle with `/readonly` or `/ro` command, or press `Shift+Tab`.
+
 
 

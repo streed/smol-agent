@@ -97,6 +97,29 @@ export function estimateTokenCount(messages) {
 // ── Streaming chat ───────────────────────────────────────────────────
 
 /**
+ * Check if an error indicates context overflow
+ */
+function isContextOverflowError(err) {
+  if (!err) return false;
+  const msg = (err.message || err.error || String(err)).toLowerCase();
+  
+  const patterns = [
+    'context length',
+    'prompt is too long',
+    'maximum context',
+    'token limit',
+    'sequence length',
+    'too many tokens',
+    'context window',
+    'exceeds maximum',
+    'requested tokens',
+    'input too long',
+  ];
+  
+  return patterns.some(p => msg.includes(p));
+}
+
+/**
  * Open a streaming chat connection with retry on connection failure.
  * Returns the raw async-iterable stream from the Ollama client.
  */
@@ -127,6 +150,14 @@ async function connectStream(client, model, messages, tools, signal, maxTokens, 
       return stream;
     } catch (err) {
       lastError = err;
+
+      // Context overflow errors should not be retried - need to prune messages
+      if (isContextOverflowError(err)) {
+        const error = new Error('Context limit exceeded');
+        error.code = 'CONTEXT_OVERFLOW';
+        error.originalError = err;
+        throw error;
+      }
 
       if (err.status === 429 || err.message?.includes("rate limit")) {
         recent429Count++;
@@ -224,6 +255,14 @@ export async function chatWithRetry(
       return response;
     } catch (err) {
       lastError = err;
+
+      // Context overflow errors should not be retried
+      if (isContextOverflowError(err)) {
+        const error = new Error('Context limit exceeded');
+        error.code = 'CONTEXT_OVERFLOW';
+        error.originalError = err;
+        throw error;
+      }
 
       if (err.status === 429 || err.message?.includes("rate limit")) {
         recent429Count++;

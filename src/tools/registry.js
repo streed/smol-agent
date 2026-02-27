@@ -7,9 +7,6 @@ import { logger } from '../logger.js';
 
 const tools = new Map();
 
-// Tools that modify files or run commands (blocked in read-only mode)
-const WRITE_TOOLS = new Set(["run_command", "write_file", "replace_in_file"]);
-
 // Core tools — always shown to the model. Keeping this small improves
 // tool-selection accuracy on smaller models (7B–14B).
 const CORE_TOOLS = new Set([
@@ -83,13 +80,11 @@ export function register(name, { description, parameters, execute, core }) {
 
 /**
  * Return the tools array in the format Ollama expects.
- * @param {boolean} readOnly - If true, exclude write tools
  * @param {boolean} coreOnly - If true, only include core tools (default true)
  */
-export function ollamaTools(readOnly = false, coreOnly = true) {
+export function ollamaTools(coreOnly = true) {
   const out = [];
   for (const [name, tool] of tools) {
-    if (readOnly && WRITE_TOOLS.has(name)) continue;
     if (coreOnly && !tool.core) continue;
     out.push({
       type: "function",
