@@ -94,16 +94,49 @@ This approach helps avoid "plan drift" and ensures you're happy with the approac
 
 ## Install
 
+### Quick Install (recommended)
+
 ```bash
-git clone <repo-url> && cd small-coding-agent
+git clone https://github.com/smol-ai/smol-agent.git
+cd smol-agent
+./install.sh
+```
+
+The installer will:
+1. Check Node.js and npm are installed
+2. Install npm dependencies
+3. Link `smol-agent` globally
+
+### Manual Install
+
+```bash
+git clone https://github.com/smol-ai/smol-agent.git
+cd smol-agent
 npm install
+npm link   # makes `smol-agent` available globally
+```
 
-# Option A: run directly
-npm start
+### Via npm (coming soon)
 
-# Option B: install globally as a CLI
-npm link
-smol-agent
+```bash
+npm install -g smol-agent
+```
+
+## Update
+
+To update to the latest version:
+
+```bash
+cd smol-agent
+git pull
+npm install
+```
+
+## Uninstall
+
+```bash
+npm unlink
+rm -rf smol-agent
 ```
 
 ## Usage

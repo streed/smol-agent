@@ -1,2 +1,32 @@
+# Dependencies
 node_modules/
+
+# Build outputs
+dist/
+build/
+
+# Environment
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Agent state
 .smol-agent/
+PLAN-*.md
+
+# Logs
+*.log
+npm-debug.log*
+
+# Lock files (we use package-lock.json)
+# yarn.lock
+# pnpm-lock.yaml

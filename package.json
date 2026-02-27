@@ -1,11 +1,31 @@
 {
   "name": "smol-agent",
   "version": "1.0.0",
-  "description": "A small coding agent powered by Ollama",
+  "description": "A small coding agent that runs in your terminal, powered by Ollama for local LLM hosting",
   "type": "module",
+  "main": "./src/index.js",
   "bin": {
     "smol-agent": "./src/index.js"
   },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/smol-ai/smol-agent.git"
+  },
+  "keywords": [
+    "ollama",
+    "llm",
+    "ai",
+    "agent",
+    "coding",
+    "terminal",
+    "cli"
+  ],
+  "author": "smol-ai",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/smol-ai/smol-agent/issues"
+  },
+  "homepage": "https://github.com/smol-ai/smol-agent#readme",
   "scripts": {
     "start": "node src/index.js"
   },
