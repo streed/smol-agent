@@ -56,106 +56,10 @@ All tools self-register by calling `register(name, { description, parameters, ex
 | `web_search.js` | `web_search` | Web search via `ollama.webSearch()`. Requires `OLLAMA_API_KEY`. Needs client injected via `setOllamaClient()`. |
 | `web_fetch.js` | `web_fetch` | Fetches a URL via `ollama.webFetch()`. Truncates to 12k chars. Needs client injected via `setOllamaClient()`. |
 | `ask_user.js` | `ask_user` | Asks user a question. Works via a promise bridge: UI sets a handler with `setAskHandler()`, tool awaits it. |
-| `spawn_agent.js` | `spawn_agent` | Spawns child agent with `--agent-id`. Child agents cannot spawn further sub-agents. Returns output from child process. |
-| `agent_coordinator.js` | `agent_coordinator` | Manages child agents, handles state persistence in `.smol-agent/state/`. Coordinates spawn/monitor/sync/report actions. |
-| `agent_monitor.js` | `agent_monitor` | Monitors progress of child agents. Returns status, progress, timing info. |
-| `agent_status.js` | `agent_status` | Checks status of any agent instance (running, completed, failed, progress). |
 
 ## Module system
 
 This project uses **ES modules** (`"type": "module"` in package.json). **Never use `require()`** — always use `import` / `export`. This includes conditional imports; use top-level `import` or dynamic `import()` instead of `require()`.
-
-## Multi-Agent System
-
-### Architecture
-
-- **Single-level hierarchy**: Parent agents can spawn child agents, but child agents cannot spawn further sub-agents
-- **State synchronization**: Agents share state via file-based coordination in `.smol-agent/state/`
-- **Concurrent execution**: Child agents work independently while reporting progress back to parent
-
-### Agent Types
-
-| Agent Type | Capabilities |
-|------------|-------------|
-| **Parent** | Full tool access including `spawn_agent`, `agent_coordinator`, `agent_monitor`, `agent_status` |
-| **Child** | Limited tools: cannot use `spawn_agent` or `agent_coordinator` (no sub-agent spawning) |
-
-### Environment Variables
-
-| Variable | Purpose |
-|----------|---------|
-| `AGENT_INSTANCE_ID` | Unique identifier for the agent instance |
-| `SMOL_AGENT_PARENT_ID` | Parent agent ID (set automatically for child agents) |
-| `AGENT_STATE_DIR` | Directory for agent state files (default: `.smol-agent/state/`) |
-
-### Tool Usage
-
-#### Spawning a Child Agent
-
-```json
-{
-  "name": "spawn_agent",
-  "arguments": {
-    "prompt": "Solve sub-problem X",
-    "child_agent_id": "child-1",
-    "context": "Optional context from parent"
-  }
-}
-```
-
-#### Monitoring Agents
-
-```json
-{
-  "name": "agent_coordinator",
-  "arguments": {
-    "action": "monitor",
-    "agent_ids": ["child-1", "child-2"]
-  }
-}
-```
-
-#### Reporting Progress (Child Agents)
-
-```json
-{
-  "name": "agent_coordinator",
-  "arguments": {
-    "action": "report",
-    "update": {
-      "progress": 50,
-      "status": "running",
-      "message": "Working on task..."
-    }
-  }
-}
-```
-
-### State Files
-
-Each agent's state is persisted in `.smol-agent/state/<agent_id>.json`:
-
-```json
-{
-  "agent_id": "child-1",
-  "status": "completed",
-  "progress": 100,
-  "parent_id": "agent-123",
-  "start_time": 1712345678901,
-  "end_time": 1712345689012,
-  "exit_code": 0,
-  "stdout": "Output from child process...",
-  "stderr": "",
-  "error": null
-}
-```
-
-### When to Use Multi-Agent
-
-- **Parallel processing**: Break complex tasks into independent sub-tasks
-- **Specialization**: Assign different agents to different parts of a problem
-- **Progress tracking**: Parent sees real-time progress from all children
-- **Error isolation**: Child failures don't necessarily crash parent
 
 ## Self-Generated Tools
 

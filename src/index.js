@@ -14,7 +14,7 @@ let model = undefined;
 let contextSize = undefined;
 let promptText = undefined;
 let jailDirectory = process.cwd();
-let agentId = undefined;
+let allTools = undefined; // undefined = auto-detect from model size
 
 for (let i = 0; i < args.length; i++) {
   const a = args[i];
@@ -26,13 +26,12 @@ for (let i = 0; i < args.length; i++) {
     contextSize = parseInt(args[++i]);
   } else if ((a === "--directory" || a === "-d") && args[i + 1]) {
     jailDirectory = path.resolve(args[++i]);
-    // Validate that the directory exists
     if (!fs.existsSync(jailDirectory) || !fs.statSync(jailDirectory).isDirectory()) {
       console.error(`Error: Directory '${jailDirectory}' does not exist or is not a directory`);
       process.exit(1);
     }
-  } else if ((a === "--agent-id" || a === "-a") && args[i + 1]) {
-    agentId = args[++i];
+  } else if (a === "--all-tools") {
+    allTools = true;
   } else if (a === "--help") {
     printUsage();
     process.exit(0);
@@ -42,14 +41,6 @@ for (let i = 0; i < args.length; i++) {
   }
 }
 
-// Set up agent instance ID (for multi-agent coordination)
-if (agentId) {
-  process.env.AGENT_INSTANCE_ID = agentId;
-} else if (!process.env.AGENT_INSTANCE_ID) {
-  // Generate a default ID if not provided
-  process.env.AGENT_INSTANCE_ID = `agent-${process.pid}-${Date.now()}`;
-}
-
 function printUsage() {
   console.log(`smol-agent — a small coding agent powered by Ollama
 
@@ -57,77 +48,65 @@ Usage:
   smol-agent [options] [prompt]
 
 Options:
-  -m, --model <name>        Ollama model to use (default: qwen2.5-coder:7b)
+  -m, --model <name>        Ollama model to use (default: qwen3.5:27b)
   -H, --host <url>          Ollama server URL (default: http://127.0.0.1:11434)
-  -c, --context-size <num>  Maximum number of lines to include in README/AGENT.md snippets (default: 100)
-  -d, --directory <path>    Set working directory and jail boundary (default: current directory)
-  -a, --agent-id <id>       Agent instance identifier (for multi-agent coordination)
+  -c, --context-size <num>  Max lines for AGENT.md snippet (default: 100)
+  -d, --directory <path>    Set working directory and jail boundary (default: cwd)
+      --all-tools           Expose all tools (auto-detected for 30B+ models)
       --help                Show this help message
 
 Interactive Commands:
-  /plan                     Switch to planning mode (read-only tools)
-  /code                     Switch to coding mode (full access)
-  /mode                     Show current mode
-  /reset                    Clear conversation history
-  exit / quit               Exit the agent
-
-Multi-Agent Features:
-  - Child agents are spawned with limited capabilities
-  - Parent agents can spawn child agents using spawn_agent tool
-  - Child agents report progress to parent via agent_coordinator
-  - All agents share state via file-based coordination in .smol-agent/state/
+  /readonly or /ro   Toggle read-only mode (disables write tools)
+  /reset             Clear conversation history
+  /inspect           Dump current context to CONTEXT.md
+  shift+tab          Toggle read-only mode
+  Ctrl+C             Cancel current operation (double-tap to exit)
+  exit / quit        Exit the agent
 
 Examples:
   smol-agent "add error handling to src/index.js"
   smol-agent -m codellama "refactor the auth module"
-  smol-agent -a "agent-1" "work on this specific task"  # Named agent
-  smol-agent -c 50 "update the documentation"
   smol-agent -d ./my-project "add a new feature"
   smol-agent                                         # interactive mode`);
 }
 
 // ── Boot ─────────────────────────────────────────────────────────────
-const agent = new Agent({ host, model, contextSize, jailDirectory });
 
-// Check if raw mode is supported
-const isRawModeSupported = process.stdin.isTTY && typeof process.stdin.setRawMode === 'function';
+// Auto-detect: expose all tools for 30B+ models, core-only for smaller ones.
+function shouldUseCoreOnly(modelName) {
+  if (allTools === true) return false;
+  if (!modelName) return true; // default to core-only
+  // Extract parameter count from model name (e.g. "qwen2.5-coder:32b" → 32)
+  const sizeMatch = modelName.match(/(\d+)[bB]/);
+  if (sizeMatch) {
+    const params = parseInt(sizeMatch[1]);
+    return params < 30;
+  }
+  return true; // unknown size → be conservative
+}
 
-// If raw mode is not supported, create a mock stdin to prevent Ink from trying to enable it
+const coreToolsOnly = shouldUseCoreOnly(model);
+const agent = new Agent({ host, model, contextSize, jailDirectory, coreToolsOnly });
+
+const isRawModeSupported = process.stdin.isTTY && typeof process.stdin.setRawMode === "function";
+
 let renderOptions = {};
 if (!isRawModeSupported) {
-  // Create a mock stdin that pretends to support raw mode
   const mockStdin = {
     isTTY: true,
     setRawMode: () => {},
     setEncoding: () => {},
     ref: () => {},
     unref: () => {},
-    on: (event, callback) => {
-      if (event === 'data') {
-        process.stdin.on(event, callback);
-      }
-    },
-    removeListener: (event, callback) => {
-      if (event === 'data') {
-        process.stdin.removeListener(event, callback);
-      }
-    },
+    on: (event, cb) => { if (event === "data") process.stdin.on(event, cb); },
+    removeListener: (event, cb) => { if (event === "data") process.stdin.removeListener(event, cb); },
     resume: () => {},
     pause: () => {},
-    addListener: (event, callback) => {
-      if (event === 'readable') {
-        // Don't actually add a listener for readable events
-      }
-    },
-    removeListener: (event, callback) => {
-      if (event === 'readable') {
-        // Don't actually remove a listener for readable events
-      }
-    }
+    addListener: () => {},
   };
   renderOptions = { stdin: mockStdin, exitOnCtrlC: false };
 } else {
-  renderOptions = { exitOnCtrlC: true };
+  renderOptions = { exitOnCtrlC: false };
 }
 
 render(React.createElement(App, { agent, initialPrompt: promptText }), renderOptions);
