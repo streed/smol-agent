@@ -30,3 +30,4 @@ npm-debug.log*
 # Lock files (we use package-lock.json)
 # yarn.lock
 # pnpm-lock.yaml
+CONTEXT.md

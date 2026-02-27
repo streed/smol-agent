@@ -20,7 +20,7 @@
     "terminal",
     "cli"
   ],
-  "author": "smol-ai",
+  "author": "Sean Reed",
   "license": "MIT",
   "bugs": {
     "url": "https://github.com/smol-ai/smol-agent/issues"

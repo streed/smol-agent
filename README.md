@@ -1,8 +1,26 @@
 # smol-agent
 
+[![MIT License](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+[![Node.js Version](https://img.shields.io/badge/node-%3E%3D18.0.0-brightgreen)](https://nodejs.org/)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
+
 A small coding agent that runs in your terminal, powered by [Ollama](https://ollama.com) for local LLM hosting.
 
 smol-agent gives a local language model the tools it needs to read, write, and edit code, run shell commands, search across a codebase, and ask you for clarification when it gets stuck — all wrapped in a colorful [Ink](https://github.com/vadimdemedes/ink)-based terminal UI.
+
+## Table of Contents
+
+- [What it looks like](#what-it-looks-like)
+- [Prerequisites](#prerequisites)
+- [Install](#install)
+- [Usage](#usage)
+- [Tools](#tools)
+- [Context Management](#context-management)
+- [Context Injection](#context-injection)
+- [Architecture](#architecture)
+- [Contributing](#contributing)
+- [Security](#security)
+- [License](#license)
 
 ## What it looks like
 
@@ -250,6 +268,24 @@ On first run, `context.js` gathers a snapshot of the project (file tree, git sta
 
 The Ink UI subscribes to `tool_call`, `tool_result`, `response`, and `error` events emitted by the agent, rendering tool activity in real time with a spinner and status text. The `ask_user` tool is wired through a promise bridge so the Ink app collects the answer inline without readline conflicts.
 
+## Contributing
+
+We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+
+- **Bug reports**: Use the [bug report template](.github/ISSUE_TEMPLATE/bug_report.md)
+- **Feature requests**: Use the [feature request template](.github/ISSUE_TEMPLATE/feature_request.md)
+- **Pull requests**: See the [PR template](.github/PULL_REQUEST_TEMPLATE.md)
+
+## Security
+
+Please review our [Security Policy](SECURITY.md) before reporting vulnerabilities.
+
 ## License
 
-MIT
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## Acknowledgments
+
+- Built with [Ollama](https://ollama.com) for local LLM inference
+- UI powered by [Ink](https://github.com/vadimdemedes/ink) (React for terminals)
+- Inspired by the many AI coding assistants making development easier
