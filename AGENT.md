@@ -11,9 +11,22 @@ npm install          # install dependencies
 npm start            # run the agent (equivalent to: node src/index.js)
 node src/index.js    # direct run
 node src/index.js -m <model> "prompt here"  # one-shot with specific model
+node src/index.js -d ./my-project "prompt"  # run in a specific directory
+node src/index.js --all-tools "prompt"      # expose all tools (for smaller models)
 ```
 
 No test suite exists yet. No build step — plain ES modules (Node >= 18).
+
+### CLI Options
+
+| Option | Description |
+|--------|-------------|
+| `-m, --model <name>` | Ollama model to use (default: qwen2.5-coder:32b) |
+| `-H, --host <url>` | Ollama server URL (default: http://127.0.0.1:11434) |
+| `-c, --context-size <num>` | Max lines for AGENT.md snippet (default: 100) |
+| `-d, --directory <path>` | Set working directory and jail boundary (default: cwd) |
+| `--all-tools` | Expose all tools (auto-detected for 30B+ models) |
+| `--help` | Show help message |
 
 ## Architecture overview
 
@@ -29,11 +42,16 @@ The agent is an EventEmitter that drives a loop: send messages to Ollama, check 
 
 | File | Lines | Purpose |
 |------|-------|---------|
-| `index.js` | 49 | CLI entry point. Parses `--model`, `--host`, `--help` args. Creates `Agent`, renders Ink `App`. |
-| `agent.js` | 379 | **Core agent loop.** `Agent` class (extends EventEmitter). Holds conversation `messages[]`, calls Ollama, processes tool calls in a loop. Contains the system prompt. Also has `parseToolCallsFromContent()` fallback for models that emit tool calls as JSON in text instead of using Ollama's native `tool_calls` field. |
-| `context.js` | 126 | **Project context gathering.** `gatherContext(cwd)` builds a string with: working directory, file tree (2 levels), git branch/status/log, config file contents (package.json, tsconfig, etc.), and README excerpt. Injected into the system prompt on first `run()`. |
-| `context-manager.js` | 270 | **Context window management.** Tracks token usage, prunes conversation history when approaching limits, truncates large tool results, and handles context overflow errors from Ollama. |
-| `ollama.js` | 280 | Ollama API wrapper with streaming, rate limiting, and retry logic. Exports `createClient(host)`, `chatStream()`, `chatWithRetry()`, and `DEFAULT_MODEL`. |
+| `index.js` | 113 | CLI entry point. Parses `--model`, `--host`, `--directory`, `--all-tools` args. Auto-detects tool exposure based on model size (30B+ gets all tools). Creates `Agent`, renders Ink `App`. |
+| `agent.js` | 465 | **Core agent loop.** `Agent` class (extends EventEmitter). Holds conversation `messages[]`, calls Ollama, processes tool calls in a loop. Contains the system prompt. Also has `parseToolCallsFromContent()` fallback for models that emit tool calls as JSON in text instead of using Ollama's native `tool_calls` field. |
+| `context.js` | 126 | **Project context gathering.** `gatherContext(cwd, contextSize)` builds a string with: working directory, project type detection, file tree (2 levels), git branch/status, and AGENT.md excerpt. Injected into the system prompt on first `run()`. |
+| `context-manager.js` | 303 | **Context window management.** Tracks token usage, prunes conversation history when approaching limits, truncates large tool results, and handles context overflow errors from Ollama. |
+| `ollama.js` | 266 | Ollama API wrapper with streaming, rate limiting, and retry logic. Exports `createClient(host)`, `chatStream()`, `chatWithRetry()`, and `DEFAULT_MODEL`. |
+| `conversation-summarizer.js` | 83 | Token estimation utilities. `estimateTokenCount()` and `getTokenBreakdown()` for context management. |
+| `errors.js` | 64 | Shared error classification. `isContextOverflowError()` detects context limit errors. `classifyError()` categorizes errors as transient/model_error/logic_error for retry logic. |
+| `logger.js` | 159 | File-based logging to `.smol-agent/state/agent.log`. Log levels (debug/info/warn/error), controlled by `SMOL_AGENT_LOG_LEVEL` env var. |
+| `path-utils.js` | 43 | Path validation utilities. `resolveJailedPath()` and `validateJailedPath()` ensure file operations stay within the jail directory. |
+| `plan-tracker.js` | 148 | Plan progress tracking. `getCurrentPlan()`, `getPlanSummary()`, `hasActivePlan()`, `updatePlanStatus()`. Used for multi-step task execution. |
 
 ### UI (src/ui/)
 
