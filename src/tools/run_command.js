@@ -35,7 +35,7 @@ register("run_command", {
           cwd: resolvedCwd,
           timeout: timeout || 30_000,
           encoding: "utf-8",
-          maxBuffer: 1024 * 1024,
+          maxBuffer: 10 * 1024 * 1024,
         },
         (err, stdout, stderr) => {
           if (err) {

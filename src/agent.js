@@ -92,25 +92,28 @@ function parseToolCallsFromContent(content) {
 
 // ── System prompt ────────────────────────────────────────────────────
 
-const SYSTEM_PROMPT = `You are smol-agent, a coding assistant that runs in the user's terminal.
-You have direct access to the project through tools. Your job is to DO the work, not describe it.
-
-IMPORTANT: Always use your tools to take action. Never just explain what you would do.
+const SYSTEM_PROMPT = `You are smol-agent, an EXECUTOR that writes and modifies code directly via tools.
+Do NOT describe what you would do — call the tool immediately.
 
 ## Workflow
-
-1. Explore: list_files, grep, read_file to understand the code.
-2. Edit: replace_in_file for targeted changes, write_file for new files.
-3. Verify: run_command to run tests/builds.
-4. Respond briefly with what you did.
+1. **Explore** — list_files, grep, read_file to understand the codebase.
+2. **Edit** — replace_in_file for surgical changes; write_file for new files.
+3. **Verify** — run_command to run tests, linters, or builds.
+4. **Report** — one short paragraph summarising what you changed and why.
 
 ## Rules
-
-- Act immediately. Do not ask for permission unless something is genuinely ambiguous.
+- Think internally, then CALL the tool. Never narrate "I will…" without acting.
 - Use relative paths from the project root.
-- Keep responses short — the user wants results, not essays.
 - Prefer replace_in_file over write_file for existing files.
-- Prefer file tools over shell commands for file operations.`;
+- Prefer file tools over shell commands for file operations.
+- Keep responses concise — the user wants results, not essays.
+- Ask the user only when the request is genuinely ambiguous.
+
+## Example tool call
+When the user asks "Add a hello() function to utils.js", respond with a tool call like:
+<tool_call>
+{"name": "replace_in_file", "arguments": {"filePath": "src/utils.js", "oldText": "module.exports = {", "newText": "function hello() {\\n  return 'Hello!';\\n}\\n\\nmodule.exports = {\\n  hello,"}}
+</tool_call>`;
 
 /**
  * Detect if the model's text response looks like it's *describing* tool
@@ -153,6 +156,7 @@ export class Agent extends EventEmitter {
     this.client = ollama.createClient(host);
     this.model = model || ollama.DEFAULT_MODEL;
     this.contextSize = contextSize;
+    this.maxTokens = contextSize || 128000;
     this.jailDirectory = jailDirectory || process.cwd();
     this.messages = [];
     this.running = false;
@@ -163,7 +167,10 @@ export class Agent extends EventEmitter {
     this.coreToolsOnly = coreToolsOnly ?? true;
 
     // Context management
-    this.contextManager = new ContextManager(128000);
+    this.contextManager = new ContextManager(this.maxTokens);
+
+    // Circuit breaker — track consecutive failures per tool
+    this._toolFailures = new Map();
 
     setSearchClient(this.client);
     setFetchClient(this.client);
@@ -186,6 +193,19 @@ export class Agent extends EventEmitter {
       contextBlock = await gatherContext(this.jailDirectory, this.contextSize);
     } catch { /* proceed without context */ }
 
+    // Build compact tool schema block so the model knows the available API
+    const allTools = registry.ollamaTools(false);
+    const toolLines = allTools.map(t => {
+      const fn = t.function;
+      const params = fn.parameters?.properties || {};
+      const paramList = Object.entries(params)
+        .map(([k, v]) => `${k}: ${v.type || 'string'}`)
+        .join(', ');
+      const desc = (fn.description || '').split('.')[0];
+      return `- **${fn.name}**(${paramList}): ${desc}.`;
+    });
+    const toolSchemaBlock = `\n\n## Available tools\n${toolLines.join('\n')}`;
+
     // List extended tools so the model knows they exist but isn't overwhelmed
     const extended = registry.extendedToolNames();
     const extendedNote = extended.length > 0
@@ -193,8 +213,8 @@ export class Agent extends EventEmitter {
       : "";
 
     const systemContent = contextBlock
-      ? `${SYSTEM_PROMPT}${extendedNote}\n\n# Project context\n\n${contextBlock}`
-      : `${SYSTEM_PROMPT}${extendedNote}`;
+      ? `${SYSTEM_PROMPT}${toolSchemaBlock}${extendedNote}\n\n# Project context\n\n${contextBlock}`
+      : `${SYSTEM_PROMPT}${toolSchemaBlock}${extendedNote}`;
 
     this.messages = [{ role: "system", content: systemContent }];
     this._initialized = true;
@@ -235,6 +255,7 @@ export class Agent extends EventEmitter {
 
     const tools = registry.ollamaTools(this.coreToolsOnly);
     let iterations = 0;
+    let streamTimedOut = false;
 
     try {
       while (iterations++ < 200) {
@@ -247,10 +268,27 @@ export class Agent extends EventEmitter {
 
         this.emit("stream_start");
 
+        // Stream timeout — abort if no token arrives within 60 seconds
+        streamTimedOut = false;
+        let streamTimer = setTimeout(() => {
+          streamTimedOut = true;
+          this.abortController.abort();
+        }, 60_000);
+        const resetStreamTimer = () => {
+          clearTimeout(streamTimer);
+          if (!streamTimedOut) {
+            streamTimer = setTimeout(() => {
+              streamTimedOut = true;
+              this.abortController.abort();
+            }, 60_000);
+          }
+        };
+
         for await (const event of ollama.chatStream(
           this.client, this.model, this.messages, tools,
           this.abortController.signal, this.maxTokens,
         )) {
+          resetStreamTimer();
           if (event.type === "token") {
             fullContent += event.content;
             this.emit("token", { content: event.content });
@@ -265,6 +303,7 @@ export class Agent extends EventEmitter {
           }
         }
 
+        clearTimeout(streamTimer);
         this.emit("stream_end");
 
         // Fallback: parse tool calls from content text
@@ -301,9 +340,22 @@ export class Agent extends EventEmitter {
           return content;
         }
 
+        // ── Deduplicate tool calls ──
+        const seen = new Set();
+        const uniqueToolCalls = [];
+        for (const tc of toolCalls) {
+          const key = JSON.stringify({ name: tc.function.name, args: tc.function.arguments });
+          if (seen.has(key)) {
+            logger.info(`Skipping duplicate tool call: ${tc.function.name}`);
+            continue;
+          }
+          seen.add(key);
+          uniqueToolCalls.push(tc);
+        }
+
         // ── Execute tool calls in parallel ──
         const results = await Promise.all(
-          toolCalls.map(async (tc) => {
+          uniqueToolCalls.map(async (tc) => {
             const name = tc.function.name;
             const args = tc.function.arguments;
             this.emit("tool_call", { name, args });
@@ -312,11 +364,26 @@ export class Agent extends EventEmitter {
               return { error: "Operation cancelled" };
             }
 
+            // Circuit breaker — skip tools that failed 3+ times consecutively
+            const failures = this._toolFailures.get(name) || 0;
+            if (failures >= 3) {
+              const msg = `Tool "${name}" has failed ${failures} times consecutively. Try a different approach.`;
+              this.emit("tool_result", { name, result: { error: msg } });
+              return { error: msg };
+            }
+
             let result = await registry.execute(name, args);
-            
+
+            // Track consecutive failures
+            if (result?.error) {
+              this._toolFailures.set(name, failures + 1);
+            } else {
+              this._toolFailures.set(name, 0);
+            }
+
             // Truncate large tool results to prevent context bloat
             result = this.contextManager.truncateToolResult(result);
-            
+
             this.emit("tool_result", { name, result });
             return result;
           }),
@@ -339,19 +406,30 @@ export class Agent extends EventEmitter {
       this.abortController = null;
 
       if (err.name === "AbortError" || err.message === "Operation cancelled") {
+        if (streamTimedOut) {
+          const msg = "(Stream timed out — no response from model for 60 seconds)";
+          this.emit("response", { content: msg });
+          return msg;
+        }
         this.emit("response", { content: "(Operation cancelled)" });
         return "(Operation cancelled)";
       }
 
       // Handle context overflow errors
       if (ContextManager.isContextOverflowError(err)) {
-        logger.error("Context overflow error from Ollama API");
+        const beforeUsage = this.contextManager.getUsage(this.messages);
+        logger.error(`Context overflow: ${beforeUsage.used}/${beforeUsage.max} tokens (${beforeUsage.percentage}%)`);
+
         const result = this.contextManager.pruneMessages(this.messages, { aggressive: true });
         this.messages = result.messages;
-        this.emit("error", new Error(
-          "Context limit exceeded. Conversation has been pruned. Please try your request again."
-        ));
-        return "(Context limit exceeded - conversation pruned. Please retry.)";
+
+        const afterUsage = this.contextManager.getUsage(this.messages);
+        logger.info(`After pruning: ${afterUsage.used}/${afterUsage.max} tokens (${afterUsage.percentage}%)`);
+        this.emit("token_usage", afterUsage);
+
+        const msg = `(Context limit exceeded at ${beforeUsage.percentage}% — pruned ${result.pruned} messages, now at ${afterUsage.percentage}%. Please retry.)`;
+        this.emit("error", new Error(msg));
+        return msg;
       }
 
       this.emit("error", err);
@@ -371,6 +449,7 @@ export class Agent extends EventEmitter {
     this.messages = [];
     this._initialized = false;
     this.contextManager.reset();
+    this._toolFailures = new Map();
   }
 
   /** Get the current project context as a string. */

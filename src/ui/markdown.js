@@ -184,11 +184,11 @@ function processMarkdown(text) {
       i++;
     }
 
-    const pLines = paragraphLines.map((p, j) =>
-      e(Box, { key: j }, ...processInlineFormatting(p)),
-    );
+    // Join paragraph lines with spaces for natural text reflow
+    // (standard markdown: soft line breaks within a paragraph become spaces)
+    const joined = paragraphLines.join(" ");
     elements.push(
-      e(Box, { key: key++, marginBottom: 1, flexDirection: "column" }, ...pLines),
+      e(Box, { key: key++, marginBottom: 1 }, ...processInlineFormatting(joined)),
     );
   }
 
@@ -338,7 +338,7 @@ function renderTable(tableLines, key) {
 
 // ── Inline formatting ───────────────────────────────────────────────
 
-function processInlineFormatting(text) {
+export function processInlineFormatting(text) {
   if (!text) return [e(Text, null, "")];
   const segments = splitIntoSegments(text);
   const elements = [];

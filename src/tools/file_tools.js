@@ -3,6 +3,12 @@ import path from "node:path";
 import { register } from "./registry.js";
 import { resolveJailedPath } from "../path-utils.js";
 
+// ── Whitespace-normalized matching helper ────────────────────────────
+
+function normalizeWS(text) {
+  return text.replace(/\r\n/g, '\n').replace(/[ \t]+/g, ' ');
+}
+
 // ── read_file ───────────────────────────────────────────────────────
 
 register("read_file", {
@@ -36,6 +42,18 @@ register("read_file", {
     const stat = fs.statSync(resolved);
     if (stat.isDirectory()) {
       return { error: `Path is a directory, not a file: ${filePath}` };
+    }
+
+    // Binary file detection — probe first 8 KB for null bytes
+    const probe = Buffer.alloc(Math.min(8192, stat.size));
+    const fd = fs.openSync(resolved, 'r');
+    try {
+      fs.readSync(fd, probe, 0, probe.length, 0);
+    } finally {
+      fs.closeSync(fd);
+    }
+    if (probe.includes(0)) {
+      return { error: `File appears to be binary: ${filePath}` };
     }
 
     const raw = fs.readFileSync(resolved, "utf-8");
@@ -138,24 +156,70 @@ register("replace_in_file", {
     }
 
     const original = fs.readFileSync(resolved, "utf-8");
+    let matchType = 'exact';
+    let matchedOldText = oldText;
 
+    // 1. Exact match
     if (!original.includes(oldText)) {
-      return {
-        error: "oldText not found in file. Make sure it matches exactly, including whitespace and indentation.",
-      };
+      // 2. Whitespace-normalized match
+      const normOriginal = normalizeWS(original);
+      const normOldText = normalizeWS(oldText);
+
+      if (normOriginal.includes(normOldText)) {
+        // Find the actual region in the original text by matching normalized lines
+        const normLines = normOldText.split('\n');
+        const origLines = original.split('\n');
+        let startIdx = -1;
+
+        for (let i = 0; i <= origLines.length - normLines.length; i++) {
+          let match = true;
+          for (let j = 0; j < normLines.length; j++) {
+            if (normalizeWS(origLines[i + j]) !== normLines[j]) {
+              match = false;
+              break;
+            }
+          }
+          if (match) {
+            startIdx = i;
+            break;
+          }
+        }
+
+        if (startIdx >= 0) {
+          matchedOldText = origLines.slice(startIdx, startIdx + normLines.length).join('\n');
+          matchType = 'whitespace-normalized';
+        } else {
+          return {
+            error: "oldText not found in file. Make sure it matches exactly, including whitespace and indentation.",
+          };
+        }
+      } else {
+        // 3. No match — find closest hint using first line
+        const firstLine = oldText.split('\n')[0].trim();
+        if (firstLine.length > 10) {
+          const origLines = original.split('\n');
+          const hintLine = origLines.find(l => l.trim().includes(firstLine));
+          if (hintLine) {
+            return {
+              error: `oldText not found in file. Closest match found near: "${hintLine.trim().slice(0, 120)}"`,
+            };
+          }
+        }
+        return {
+          error: "oldText not found in file. Make sure it matches exactly, including whitespace and indentation.",
+        };
+      }
     }
 
     let updated;
     let count;
     if (replaceAll) {
-      // Count occurrences then replace all
-      count = original.split(oldText).length - 1;
-      updated = original.split(oldText).join(newText);
+      count = original.split(matchedOldText).length - 1;
+      updated = original.split(matchedOldText).join(newText);
     } else {
-      // Replace first occurrence only
       count = 1;
-      const idx = original.indexOf(oldText);
-      updated = original.slice(0, idx) + newText + original.slice(idx + oldText.length);
+      const idx = original.indexOf(matchedOldText);
+      updated = original.slice(0, idx) + newText + original.slice(idx + matchedOldText.length);
     }
 
     fs.writeFileSync(resolved, updated, "utf-8");
@@ -163,6 +227,7 @@ register("replace_in_file", {
     return {
       filePath,
       replacements: count,
+      matchType,
       oldLines: oldText.split("\n").length,
       newLines: newText.split("\n").length,
     };

@@ -47,7 +47,7 @@ function writeLog(level, message) {
  * Create a logger instance with configurable level
  */
 export function createLogger(level = LOG_LEVEL) {
-  const minLevel = LEVELS[level] || LEVELS.info;
+  let minLevel = LEVELS[level] || LEVELS.info;
 
   return {
     debug: (message) => {
@@ -75,7 +75,8 @@ export function createLogger(level = LOG_LEVEL) {
 
     // Utility methods
     setLevel: (newLevel) => {
-      minLevel = LEVELS[newLevel] || LEVELS.info;
+      // Closure captures `minLevel` from createLogger scope — must be `let`
+      minLevel = LEVELS[newLevel] ?? LEVELS.info;
     },
 
     getLevel: () => {

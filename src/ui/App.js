@@ -5,7 +5,7 @@ import Spinner from "ink-spinner";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { setAskHandler } from "../tools/ask_user.js";
-import { Markdown } from "./markdown.js";
+import { Markdown, processInlineFormatting } from "./markdown.js";
 
 const isRawModeSupported =
   process.stdin.isTTY && typeof process.stdin.setRawMode === "function";
@@ -139,7 +139,7 @@ export default function App({ agent, initialPrompt }) {
   }, [stdout]);
 
   // Multiline input state
-  const { cursorOffset, handleInput: handleMultilineInput } = useMultilineInput(input, setInput);
+  const { cursorOffset, handleInput: handleMultilineInput, pasteLineCount } = useMultilineInput(input, setInput);
   
   // Wire up ask_user handler
   useEffect(() => {
@@ -436,7 +436,7 @@ export default function App({ agent, initialPrompt }) {
           e(Box, { marginTop: 1 },
             e(Text, null,
               e(Text, { color: "cyan", bold: true }, " \u23FA  "),
-              first,
+              ...processInlineFormatting(first),
             ),
           ),
         ];
@@ -462,13 +462,21 @@ export default function App({ agent, initialPrompt }) {
 
     // ── Streaming content ──
     streamDisplay &&
-      e(Box, { marginTop: 1 },
-        e(Text, null,
-          e(Text, { color: "cyan", bold: true }, " \u23FA  "),
-          streamDisplay,
-          e(Text, { color: "cyan" }, "\u258B"),
-        ),
-      ),
+      (() => {
+        const sLines = streamDisplay.split("\n");
+        const first = sLines[0];
+        const rest = sLines.length > 1 ? sLines.slice(1).join("\n") : null;
+        return e(Box, { marginTop: 1, flexDirection: "column" },
+          e(Text, null,
+            e(Text, { color: "cyan", bold: true }, " \u23FA  "),
+            first,
+            !rest ? e(Text, { color: "cyan" }, "\u258B") : null,
+          ),
+          rest && e(Box, { marginLeft: 4 },
+            e(Text, null, rest, e(Text, { color: "cyan" }, "\u258B")),
+          ),
+        );
+      })(),
 
     // ── Spinner ──
     busy && !streamDisplay &&
@@ -491,6 +499,7 @@ export default function App({ agent, initialPrompt }) {
         cursorOffset: cursorOffset,
         focus: !busy,
         width: boxWidth,
+        pasteLineCount: pasteLineCount,
       }),
     ),
 

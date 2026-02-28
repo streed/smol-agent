@@ -14,11 +14,34 @@ const e = React.createElement;
  *   │   continuation line                          │
  *   ╰──────────────────────────────────────────────╯
  */
-export function MultilineInput({ value, cursorOffset = 0, focus = true, width = 80 }) {
+export function MultilineInput({ value, cursorOffset = 0, focus = true, width = 80, pasteLineCount = null }) {
   const boxWidth = Math.max(width, 12);
   // Inside each row: "│ " + "> " + content + pad + " │"
   //                   2      2                    2   = 6 chars of chrome
   const contentWidth = Math.max(boxWidth - 6, 1);
+
+  // ── Borders ──
+  const topBorder = e(Text, { dimColor: true }, "\u256D" + "\u2500".repeat(boxWidth - 2) + "\u256E");
+  const botBorder = e(Text, { dimColor: true }, "\u2570" + "\u2500".repeat(boxWidth - 2) + "\u256F");
+
+  // ── Paste indicator mode ──
+  if (pasteLineCount !== null) {
+    const indicator = `{${pasteLineCount} lines pasted}`;
+    const visLen = indicator.length + (focus ? 1 : 0);
+    const pad = " ".repeat(Math.max(0, contentWidth - visLen));
+    return e(Box, { flexDirection: "column" },
+      topBorder,
+      e(Box, null,
+        e(Text, { dimColor: true }, "\u2502 "),
+        e(Text, { color: "green", bold: true }, "> "),
+        e(Text, { color: "yellow", dimColor: true }, indicator),
+        focus ? e(Text, { inverse: true }, " ") : null,
+        e(Text, null, pad),
+        e(Text, { dimColor: true }, " \u2502"),
+      ),
+      botBorder,
+    );
+  }
 
   // ── Split & word-wrap ──
   const lines = value.split("\n");
@@ -88,10 +111,6 @@ export function MultilineInput({ value, cursorOffset = 0, focus = true, width = 
     displayLine += widths.length;
   }
 
-  // ── Borders ──
-  const topBorder = e(Text, { dimColor: true }, "\u256D" + "\u2500".repeat(boxWidth - 2) + "\u256E");
-  const botBorder = e(Text, { dimColor: true }, "\u2570" + "\u2500".repeat(boxWidth - 2) + "\u256F");
-
   // ── Content rows ──
   const rows = displayLines.map((line, i) => {
     const isFirst = i === 0;
@@ -152,6 +171,7 @@ export function MultilineInput({ value, cursorOffset = 0, focus = true, width = 
 export function useMultilineInput(value, onChange) {
   const [cursorOffset, setCursorOffset] = React.useState(value.length);
   const isInternalChange = React.useRef(false);
+  const [isPasteMode, setIsPasteMode] = React.useState(false);
 
   // Keep cursor in sync when value changes externally (e.g., cleared after submit)
   React.useEffect(() => {
@@ -159,6 +179,13 @@ export function useMultilineInput(value, onChange) {
       setCursorOffset(value.length);
     }
     isInternalChange.current = false;
+  }, [value]);
+
+  // Clear paste mode when value is empty or has no newlines
+  React.useEffect(() => {
+    if (!value || !value.includes("\n")) {
+      setIsPasteMode(false);
+    }
   }, [value]);
 
   // Helper: update value from within the hook without triggering cursor reset
@@ -201,10 +228,11 @@ export function useMultilineInput(value, onChange) {
   const handleInput = (input, key) => {
     // ── Paste: multi-character input ──
     if (input && input.length > 1 && !key.ctrl && !key.meta) {
-      updateValue(
-        value.slice(0, cursorOffset) + input + value.slice(cursorOffset),
-        cursorOffset + input.length
-      );
+      const newValue = value.slice(0, cursorOffset) + input + value.slice(cursorOffset);
+      updateValue(newValue, cursorOffset + input.length);
+      if (input.includes("\n")) {
+        setIsPasteMode(true);
+      }
       return true;
     }
 
@@ -367,7 +395,9 @@ export function useMultilineInput(value, onChange) {
     return false;
   };
 
-  return { cursorOffset, handleInput };
+  const pasteLineCount = isPasteMode && value.includes("\n") ? value.split("\n").length : null;
+
+  return { cursorOffset, handleInput, pasteLineCount };
 }
 
 export default MultilineInput;

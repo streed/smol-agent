@@ -1,7 +1,8 @@
 import { Ollama } from "ollama";
 import { logger, isTransientError } from "./logger.js";
+import { isContextOverflowError, classifyError } from "./errors.js";
 
-const DEFAULT_MODEL = "glm-4.7-flash:latest";
+const DEFAULT_MODEL = process.env.SMOL_AGENT_MODEL || "qwen2.5-coder:32b";
 const DEFAULT_MAX_TOKENS = 128000;
 const MAX_RETRIES = 3;
 
@@ -97,29 +98,6 @@ export function estimateTokenCount(messages) {
 // ── Streaming chat ───────────────────────────────────────────────────
 
 /**
- * Check if an error indicates context overflow
- */
-function isContextOverflowError(err) {
-  if (!err) return false;
-  const msg = (err.message || err.error || String(err)).toLowerCase();
-  
-  const patterns = [
-    'context length',
-    'prompt is too long',
-    'maximum context',
-    'token limit',
-    'sequence length',
-    'too many tokens',
-    'context window',
-    'exceeds maximum',
-    'requested tokens',
-    'input too long',
-  ];
-  
-  return patterns.some(p => msg.includes(p));
-}
-
-/**
  * Open a streaming chat connection with retry on connection failure.
  * Returns the raw async-iterable stream from the Ollama client.
  */
@@ -169,7 +147,7 @@ async function connectStream(client, model, messages, tools, signal, maxTokens, 
       }
 
       if (attempt < maxRetries && isTransientError(err)) {
-        await new Promise((r) => setTimeout(r, Math.pow(2, attempt) * 100));
+        await new Promise((r) => setTimeout(r, Math.random() * Math.pow(2, attempt) * 200));
         continue;
       }
 
@@ -274,7 +252,7 @@ export async function chatWithRetry(
       }
 
       if (attempt < maxRetries && isTransientError(err)) {
-        await new Promise((r) => setTimeout(r, Math.pow(2, attempt) * 100));
+        await new Promise((r) => setTimeout(r, Math.random() * Math.pow(2, attempt) * 200));
         continue;
       }
 

@@ -9,6 +9,7 @@
  */
 
 import { logger } from './logger.js';
+import { isContextOverflowError as _isOverflow } from './errors.js';
 
 // Configuration
 const DEFAULT_MAX_TOKENS = 128000;
@@ -113,46 +114,78 @@ export class ContextManager {
   pruneMessages(messages, options = {}) {
     const { aggressive = false, keepSystem = true } = options;
     const status = this.getStatus(messages);
-    
+
     if (!status.shouldPrune && !aggressive) {
       return { messages, pruned: 0 };
     }
-    
+
     if (messages.length <= MIN_KEEP_MESSAGES + 1) {
       logger.warn('Cannot prune further - minimum messages reached');
       return { messages, pruned: 0 };
     }
-    
+
     const systemMsg = keepSystem && messages[0]?.role === 'system' ? messages[0] : null;
     const restMessages = keepSystem && systemMsg ? messages.slice(1) : messages;
-    
+
     // Calculate how many messages to keep based on current usage
-    // If way over limit, be very aggressive
     const overageRatio = status.usage.percentage / 100;
     const targetPercentage = aggressive || overageRatio > 1.5 ? 0.30 : 0.50;
     const targetTokens = Math.floor(this.maxTokens * targetPercentage);
-    
+
     // Work backwards from end to find how many to keep
     let keptTokens = 0;
     const messagesToKeep = [];
-    
+
     for (let i = restMessages.length - 1; i >= 0; i--) {
       const msgTokens = estimateMessageTokens(restMessages[i]);
-      // Always keep at least MIN_KEEP_MESSAGES
       if (messagesToKeep.length >= MIN_KEEP_MESSAGES && keptTokens + msgTokens > targetTokens) {
         break;
       }
       messagesToKeep.unshift(restMessages[i]);
       keptTokens += msgTokens;
     }
-    
+
     const prunedCount = restMessages.length - messagesToKeep.length;
     if (prunedCount > 0) {
+      // Build a breadcrumb summarising what was pruned
+      const pruned = restMessages.slice(0, prunedCount);
+      const toolsUsed = new Set();
+      const userTopics = [];
+
+      for (const msg of pruned) {
+        if (msg._summarized) continue;
+        if (msg.role === 'tool') {
+          try {
+            const parsed = JSON.parse(msg.content);
+            if (parsed?.name) toolsUsed.add(parsed.name);
+          } catch { /* ignore */ }
+        }
+        if (msg.role === 'assistant' && msg.tool_calls) {
+          for (const tc of msg.tool_calls) {
+            if (tc.function?.name) toolsUsed.add(tc.function.name);
+          }
+        }
+        if (msg.role === 'user' && !msg._summarized && userTopics.length < 3) {
+          userTopics.push(truncateText(msg.content, 80));
+        }
+      }
+
+      const parts = [`${prunedCount} earlier messages removed.`];
+      if (toolsUsed.size > 0) parts.push(`Tools used: ${[...toolsUsed].join(', ')}.`);
+      if (userTopics.length > 0) parts.push(`Topics: ${userTopics.join(' | ')}`);
+
+      const breadcrumb = {
+        role: 'user',
+        content: `[Context compacted: ${parts.join(' ')}]`,
+        _summarized: true,
+      };
+
+      messagesToKeep.unshift(breadcrumb);
+
       logger.info(`Pruned ${prunedCount} messages from conversation history`);
-      // Reset actual token count since we modified messages
       this.lastPromptTokens = 0;
     }
-    
+
     const result = systemMsg ? [systemMsg, ...messagesToKeep] : messagesToKeep;
     return { messages: result, pruned: prunedCount };
   }
@@ -225,30 +258,9 @@ export class ContextManager {
     this.lastCompletionTokens = 0;
   }
 
-  /**
-   * Check if an error is a context overflow error
-   */
+  /** Proxy to shared isContextOverflowError — preserves call site in agent.js */
   static isContextOverflowError(error) {
-    if (!error) return false;
-    
-    const msg = error.message?.toLowerCase() || '';
-    const str = String(error).toLowerCase();
-    
-    // Common Ollama/LLM context overflow error patterns
-    const patterns = [
-      'context length',
-      'prompt is too long',
-      'maximum context',
-      'token limit',
-      'sequence length',
-      'too many tokens',
-      'context window',
-      'exceeds maximum',
-      'requested tokens',
-      'input too long',
-    ];
-    
-    return patterns.some(p => msg.includes(p) || str.includes(p));
+    return _isOverflow(error);
   }
 
   /**
