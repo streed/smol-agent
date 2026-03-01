@@ -15,6 +15,7 @@ let contextSize = undefined;
 let promptText = undefined;
 let jailDirectory = process.cwd();
 let allTools = undefined; // undefined = auto-detect from model size
+let autoApprove = false;
 
 for (let i = 0; i < args.length; i++) {
   const a = args[i];
@@ -32,6 +33,8 @@ for (let i = 0; i < args.length; i++) {
     }
   } else if (a === "--all-tools") {
     allTools = true;
+  } else if (a === "--auto-approve" || a === "--yolo") {
+    autoApprove = true;
   } else if (a === "--help") {
     printUsage();
     process.exit(0);
@@ -53,6 +56,7 @@ Options:
   -c, --context-size <num>  Max lines for AGENT.md snippet (default: 100)
   -d, --directory <path>    Set working directory and jail boundary (default: cwd)
       --all-tools           Expose all tools (auto-detected for 30B+ models)
+      --auto-approve        Skip approval prompts for write/command tools (alias: --yolo)
       --help                Show this help message
 
 Interactive Commands:
@@ -87,6 +91,9 @@ function shouldUseCoreOnly(modelName) {
 
 const coreToolsOnly = shouldUseCoreOnly(model);
 const agent = new Agent({ host, model, contextSize, jailDirectory, coreToolsOnly });
+if (autoApprove) {
+  agent._approveAll = true;
+}
 
 const isRawModeSupported = process.stdin.isTTY && typeof process.stdin.setRawMode === "function";
 

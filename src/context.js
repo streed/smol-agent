@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { execSync } from "node:child_process";
+import { loadMemories } from "./tools/memory.js";
 
 const IGNORED = new Set([
   "node_modules", ".git", "__pycache__", ".next", "dist", "build",
@@ -35,6 +36,20 @@ export async function gatherContext(cwd, contextSize = 100) {
   // 5. AGENT.md — user-provided instructions for the agent
   const agentMd = await readSnippet(cwd, "AGENT.md", contextSize);
   if (agentMd) sections.push(`## AGENT.md\n${agentMd}`);
+
+  // 6. Persistent memories from previous sessions
+  try {
+    const memories = await loadMemories(cwd);
+    const keys = Object.keys(memories);
+    if (keys.length > 0) {
+      const memLines = keys.slice(0, 20).map(k => {
+        const m = memories[k];
+        return `- **${k}** (${m.category || "general"}): ${m.value}`;
+      });
+      const suffix = keys.length > 20 ? `\n- ... and ${keys.length - 20} more (use recall tool)` : "";
+      sections.push(`## Memories from previous sessions\n${memLines.join("\n")}${suffix}`);
+    }
+  } catch { /* no memories */ }
 
   return sections.join("\n\n");
 }

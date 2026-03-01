@@ -14,6 +14,12 @@ const CORE_TOOLS = new Set([
   "list_files", "grep", "run_command", "ask_user",
 ]);
 
+// Tools that can modify the filesystem or execute arbitrary code.
+// These require user approval before execution (unless auto-approve is on).
+const DANGEROUS_TOOLS = new Set([
+  "write_file", "replace_in_file", "run_command",
+]);
+
 /**
  * Validate and sanitize a file path to prevent jail escape
  */
@@ -134,8 +140,13 @@ export async function execute(name, args, { cwd = process.cwd() } = {}) {
   }
 }
 
+/** Check whether a tool requires user approval before execution. */
+export function requiresApproval(name) {
+  return DANGEROUS_TOOLS.has(name);
+}
+
 export function list() {
   return [...tools.keys()];
 }
 
-export default { register, ollamaTools, execute, list, validateToolArgs, validateFilePath };
+export default { register, ollamaTools, execute, list, validateToolArgs, validateFilePath, requiresApproval };

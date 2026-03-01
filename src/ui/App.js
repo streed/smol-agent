@@ -121,6 +121,7 @@ export default function App({ agent, initialPrompt }) {
   const [busy, setBusy] = useState(false);
   const [statusText, setStatusText] = useState("");
   const [askState, setAskState] = useState(null);
+  const [approvalState, setApprovalState] = useState(null);
   const [tokenUsage, setTokenUsage] = useState(null);
 
   // Streaming state
@@ -155,6 +156,15 @@ export default function App({ agent, initialPrompt }) {
     );
   }, []);
 
+  // Wire up tool approval handler
+  useEffect(() => {
+    agent.setApprovalHandler((name, args) =>
+      new Promise((resolve) => {
+        setApprovalState({ name, args, resolve });
+      }),
+    );
+  }, [agent]);
+
   // Listen to agent events
   useEffect(() => {
     const onStreamStart = () => {
@@ -167,6 +177,10 @@ export default function App({ agent, initialPrompt }) {
       setStreamDisplay(streamRef.current);
     };
     const onStreamEnd = () => { /* wait for tool_call or response */ };
+
+    const onThinking = ({ content }) => {
+      setLog((prev) => [...prev, { role: "thinking", text: content }]);
+    };
 
     const onToolCall = ({ name, args }) => {
       // Flush any streaming content to log before showing tool
@@ -205,6 +219,7 @@ export default function App({ agent, initialPrompt }) {
     agent.on("stream_start", onStreamStart);
     agent.on("token", onToken);
     agent.on("stream_end", onStreamEnd);
+    agent.on("thinking", onThinking);
     agent.on("tool_call", onToolCall);
     agent.on("tool_result", onToolResult);
     agent.on("token_usage", onTokenUsage);
@@ -215,6 +230,7 @@ export default function App({ agent, initialPrompt }) {
       agent.off("stream_start", onStreamStart);
       agent.off("token", onToken);
       agent.off("stream_end", onStreamEnd);
+      agent.off("thinking", onThinking);
       agent.off("tool_call", onToolCall);
       agent.off("tool_result", onToolResult);
       agent.off("token_usage", onTokenUsage);
@@ -329,6 +345,8 @@ export default function App({ agent, initialPrompt }) {
   // Key bindings — stable callback to avoid listener churn during streaming
   const busyRef = useRef(false);
   busyRef.current = busy;
+  const approvalRef = useRef(null);
+  approvalRef.current = approvalState;
 
   const inputHandler = useCallback((ch, key) => {
     // Handle Ctrl+C for exit/cancel
@@ -336,6 +354,15 @@ export default function App({ agent, initialPrompt }) {
       const now = Date.now();
       if (now - lastCtrlC.current < 500) { exit(); }
       else {
+        // If an approval prompt is showing, reject it
+        if (approvalRef.current) {
+          const { name, resolve } = approvalRef.current;
+          setLog((prev) => [...prev, { role: "tool", text: `(denied ${name})` }]);
+          resolve({ approved: false });
+          setApprovalState(null);
+          lastCtrlC.current = now;
+          return;
+        }
         if (busyRef.current) {
           agent.cancel();
           streamRef.current = "";
@@ -350,7 +377,26 @@ export default function App({ agent, initialPrompt }) {
       }
       return;
     }
-    
+
+    // Handle approval prompt — single keypress: y/n/a/Enter
+    if (approvalRef.current) {
+      const { name, resolve } = approvalRef.current;
+      if (ch === "y" || key.return) {
+        setLog((prev) => [...prev, { role: "tool", text: `(approved ${name})` }]);
+        resolve({ approved: true });
+        setApprovalState(null);
+      } else if (ch === "n") {
+        setLog((prev) => [...prev, { role: "tool", text: `(denied ${name})` }]);
+        resolve({ approved: false });
+        setApprovalState(null);
+      } else if (ch === "a") {
+        setLog((prev) => [...prev, { role: "tool", text: "(approved all future tool calls)" }]);
+        resolve({ approved: true, approveAll: true });
+        setApprovalState(null);
+      }
+      return;
+    }
+
     // When not busy, handle text input (works in both normal and ask modes)
     if (!busy) {
       const handled = handleMultilineInput(ch, key);
@@ -451,6 +497,14 @@ export default function App({ agent, initialPrompt }) {
         }
         return result;
       }
+      if (entry.role === "thinking") {
+        const lines = (entry.text || "").split("\n");
+        return lines.map((line, i) =>
+          e(Text, { key: `think-${i}`, dimColor: true, color: "gray" },
+            i === 0 ? "    \u{1F9E0} " + line : "       " + line,
+          ),
+        );
+      }
       if (entry.role === "tool") {
         return [e(Text, { dimColor: true }, "    ⎿  " + (entry.text || ""))];
       }
@@ -494,6 +548,24 @@ export default function App({ agent, initialPrompt }) {
       e(Box, { marginTop: 1 },
         e(Text, { bold: true, color: "magenta" }, " ?  "),
         e(Text, { bold: true }, askState.question),
+      ),
+
+    // ── Tool approval prompt ──
+    approvalState &&
+      e(Box, { marginTop: 1, flexDirection: "column" },
+        e(Box, null,
+          e(Text, { color: "yellow", bold: true }, " \u26A0  Approve? "),
+          e(Text, { bold: true }, approvalState.name),
+          e(Text, { dimColor: true }, `(${summarizeArgs(approvalState.args)})`),
+        ),
+        e(Box, { marginLeft: 4 },
+          e(Text, { color: "green" }, "[y]"),
+          e(Text, { dimColor: true }, " approve  "),
+          e(Text, { color: "red" }, "[n]"),
+          e(Text, { dimColor: true }, " reject  "),
+          e(Text, { color: "cyan" }, "[a]"),
+          e(Text, { dimColor: true }, " approve all"),
+        ),
       ),
 
     // ── Input ──

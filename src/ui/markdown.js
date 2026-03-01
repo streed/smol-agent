@@ -188,7 +188,9 @@ function processMarkdown(text) {
     // (standard markdown: soft line breaks within a paragraph become spaces)
     const joined = paragraphLines.join(" ");
     elements.push(
-      e(Box, { key: key++, marginBottom: 1 }, ...processInlineFormatting(joined)),
+      e(Box, { key: key++, marginBottom: 1 },
+        e(Text, null, ...processInlineFormatting(joined)),
+      ),
     );
   }
 
@@ -202,9 +204,11 @@ function renderHeading(content, level, key) {
   const style = styles[Math.min(level - 1, 5)];
   const inline = processInlineFormatting(content);
   const children = [
-    e(Box, { key: "text" }, ...inline.map((el, i) =>
-      React.cloneElement(el, { ...style, key: i }),
-    )),
+    e(Box, { key: "text" },
+      e(Text, null, ...inline.map((el, i) =>
+        React.cloneElement(el, { ...style, key: i }),
+      )),
+    ),
   ];
   if (level === 1) {
     children.push(e(Text, { key: "ul", color: "magenta" }, "━".repeat(Math.min(content.length + 2, 40))));
