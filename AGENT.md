@@ -91,12 +91,21 @@ The agent manages context window usage to prevent overflow errors from Ollama:
 
 ### Thresholds
 
-- **70% usage**: Start pruning old messages
+- **55% usage**: Start LLM-based summarization of old messages
+- **70% usage**: Prune messages using importance scoring
 - **85% usage**: Aggressive pruning
 - **Tool result limit**: 15k characters (prevents context bloat)
 
 ### Features
 
+- **LLM-based summarization**: Uses the model to intelligently summarize old conversations, preserving file names, function names, and decisions. Falls back to simple extraction if LLM unavailable.
+- **Importance-based pruning**: Messages are scored by importance before pruning:
+  - System messages: highest priority
+  - User messages: high priority (contain intent)
+  - Assistant messages with tool calls: medium priority
+  - Error messages: higher priority than success
+  - Large tool results: deprioritized
+- **Progressive intervention**: Earlier thresholds allow the agent to stay responsive during long tasks
 - **Proactive pruning**: Removes old messages before hitting limits, keeping system prompt + recent conversation
 - **Tool result truncation**: Large outputs (e.g., from `read_file` or `run_command`) are automatically truncated
 - **Error recovery**: If Ollama returns a context overflow error, the agent prunes aggressively and informs the user to retry

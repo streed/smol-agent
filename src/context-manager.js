@@ -1,49 +1,137 @@
 /**
  * Context management for conversation history.
  * 
- * Handles:
- * - Token counting and budget tracking
+ * Based on research from Aider, Pydantic AI, and other coding agents:
  * - Proactive pruning before hitting limits
- * - Summarization of old messages
- * - Truncation of large tool results
+ * - LLM-based intelligent summarization
+ * - Prioritizes recent context while preserving key information
+ * - Handles tool results specially (they can be large)
+ * 
+ * Key strategies:
+ * 1. At 60% capacity: Start summarizing old messages
+ * 2. At 70% capacity: Prune tool results and old messages
+ * 3. At 85% capacity: Aggressive pruning
+ * 4. On overflow: Emergency reduction
  */
 
 import { logger } from './logger.js';
 import { isContextOverflowError as _isOverflow } from './errors.js';
+import { summarizeMessagesWithLLM, selectMessagesToSummarize } from './context-summarizer.js';
+import { estimateMessageTokens, estimateTokens, estimateTotalTokens as estimateTokensTotal } from './token-estimator.js';
 
 // Configuration
 const DEFAULT_MAX_TOKENS = 128000;
 const PRUNE_THRESHOLD = 0.70;      // Start pruning at 70% capacity
 const CRITICAL_THRESHOLD = 0.85;   // Aggressive pruning at 85%
-const MIN_KEEP_MESSAGES = 6;       // Always keep last N user/assistant pairs
+const MIN_KEEP_MESSAGES = 6;      // Always keep last N user/assistant pairs
 const MAX_TOOL_RESULT_SIZE = 15000; // Max chars for tool results (prevents context bloat)
-const SUMMARY_THRESHOLD = 0.60;    // Summarize old messages at 60%
+const SUMMARY_THRESHOLD = 0.55;   // Start summarizing at 55% (earlier than before)
+const SUMMARY_TARGET_RATIO = 0.35; // Target 35% of context for summarized portion
 
 /**
- * Estimate tokens from text (rough approximation)
+ * Get context management configuration based on model size.
+ * Larger models can handle more context and benefit from more aggressive summarization.
  */
-export function estimateTokens(text) {
-  if (!text) return 0;
-  return Math.ceil(text.length / 4);
+export function getContextConfig(modelName) {
+  const isLargeModel = modelName && (
+    modelName.includes('70b') || 
+    modelName.includes('72b') || 
+    modelName.includes('32b')
+  );
+  
+  return {
+    // Larger models can use more context before summarizing
+    summaryThreshold: isLargeModel ? 0.55 : 0.50,
+    // Same pruning threshold for all
+    pruneThreshold: PRUNE_THRESHOLD,
+    // Critical threshold
+    criticalThreshold: CRITICAL_THRESHOLD,
+    // Larger models can keep more messages when pruning
+    minKeepMessages: isLargeModel ? 8 : MIN_KEEP_MESSAGES,
+    // Enable LLM summarization for models with all tools
+    enableLLMSummarization: isLargeModel,
+  };
 }
 
+// Re-export token estimator functions for convenience
+export { estimateTokens, estimateMessageTokens };
+
 /**
- * Estimate token count for a message
+ * Calculate the importance score for a message (higher = more important to keep).
+ * Based on research from coding agents:
+ * - User messages with new requests are high priority
+ * - Error messages are high priority (contain critical context)
+ * - System messages are essential
+ * - Tool results are lower priority (can often be re-derived)
+ * - Summarized messages are lowest priority
  */
-function estimateMessageTokens(msg) {
-  let tokens = 50; // Overhead for message structure
-  if (msg.content) tokens += estimateTokens(msg.content);
-  if (msg.role) tokens += estimateTokens(msg.role);
-  if (msg.name) tokens += estimateTokens(msg.name);
-  return tokens;
+function calculateMessageImportance(msg, index, messages) {
+  let score = 50; // Base score
+  
+  // System messages are essential
+  if (msg.role === 'system') {
+    return 1000;
+  }
+  
+  // Summarized messages are lowest priority (already compressed)
+  if (msg._summarized) {
+    return 10;
+  }
+  
+  // User messages are high priority (contain user intent)
+  if (msg.role === 'user') {
+    score += 30;
+    // Recent user messages are even more important
+    if (index >= messages.length - 3) {
+      score += 20;
+    }
+  }
+  
+  // Assistant messages with tool calls contain important context
+  if (msg.role === 'assistant') {
+    if (msg.tool_calls && msg.tool_calls.length > 0) {
+      score += 15;
+    }
+    // Recent assistant messages are more important
+    if (index >= messages.length - 4) {
+      score += 25;
+    }
+  }
+  
+  // Tool results can be large but often contain critical info
+  if (msg.role === 'tool') {
+    score += 5; // Base score for tool results
+    
+    // Error results are higher priority
+    try {
+      const parsed = JSON.parse(msg.content);
+      if (parsed?.error) {
+        score += 25; // Errors are important context
+      }
+    } catch {
+      // Not JSON, could be string output
+    }
+    
+    // Very large tool results get deprioritized
+    if (msg.content && msg.content.length > 5000) {
+      score -= 20;
+    }
+  }
+  
+  // Recency bonus (exponential decay)
+  const recencyBonus = Math.floor(10 * Math.exp(-0.1 * (messages.length - index)));
+  score += recencyBonus;
+  
+  return score;
 }
 
 /**
  * Estimate total tokens in messages array
+ * @deprecated Use estimateTotalTokens from token-estimator.js
  */
 export function estimateTotalTokens(messages) {
   if (!Array.isArray(messages)) return 0;
-  return messages.reduce((sum, msg) => sum + estimateMessageTokens(msg), 0);
+  return estimateTokensTotal(messages);
 }
 
 /**
@@ -54,6 +142,16 @@ export class ContextManager {
     this.maxTokens = maxTokens;
     this.lastPromptTokens = 0; // Actual count from API when available
     this.lastCompletionTokens = 0;
+    this.ollamaHost = null; // Host URL for LLM-based summarization
+    this.llmModel = null;
+  }
+
+  /**
+   * Set the LLM client for intelligent summarization
+   */
+  setLLMClient(host, model) {
+    this.ollamaHost = host;
+    this.llmModel = model;
   }
 
   /**
@@ -85,7 +183,8 @@ export class ContextManager {
   }
 
   /**
-   * Truncate large tool results to prevent context bloat
+   * Truncate large tool results to prevent context bloat.
+   * Preserves error messages and structured data better.
    */
   truncateToolResult(result) {
     if (!result) return result;
@@ -96,7 +195,33 @@ export class ContextManager {
       return result;
     }
     
-    // Truncate and add indicator
+    // For error results, try to preserve the full error
+    if (typeof result === 'object' && result?.error) {
+      const errorStr = JSON.stringify({ error: result.error });
+      if (errorStr.length < MAX_TOOL_RESULT_SIZE) {
+        return { error: result.error, truncated: true };
+      }
+    }
+    
+    // For file content, preserve beginning and end
+    const lines = str.split('\n');
+    if (lines.length > 100) {
+      const kept = [
+        ...lines.slice(0, 50),
+        `... [${lines.length - 100} lines omitted] ...`,
+        ...lines.slice(-50)
+      ];
+      const truncated = kept.join('\n');
+      const indicator = '\n\n[... output truncated to save context space ...]';
+      
+      logger.warn(`Truncated large tool result (${str.length} -> ${truncated.length} chars, ${lines.length} -> ${kept.length} lines)`);
+      
+      return typeof result === 'string' 
+        ? truncated + indicator 
+        : { truncated: true, content: truncated + indicator };
+    }
+    
+    // Standard truncation
     const truncated = str.substring(0, MAX_TOOL_RESULT_SIZE);
     const indicator = '\n\n[... output truncated to save context space ...]';
     
@@ -109,6 +234,7 @@ export class ContextManager {
 
   /**
    * Prune conversation history to free up context space.
+   * Uses importance scoring to keep the most valuable messages.
    * Keeps system message + recent messages.
    */
   pruneMessages(messages, options = {}) {
@@ -132,23 +258,44 @@ export class ContextManager {
     const targetPercentage = aggressive || overageRatio > 1.5 ? 0.30 : 0.50;
     const targetTokens = Math.floor(this.maxTokens * targetPercentage);
 
-    // Work backwards from end to find how many to keep
+    // Score messages by importance
+    const scoredMessages = restMessages.map((msg, index) => ({
+      msg,
+      index,
+      tokens: estimateMessageTokens(msg),
+      importance: calculateMessageImportance(msg, index, restMessages),
+    }));
+
+    // Sort by importance (descending), then by recency for tie-breaking
+    scoredMessages.sort((a, b) => {
+      if (b.importance !== a.importance) return b.importance - a.importance;
+      return b.index - a.index; // More recent wins
+    });
+
+    // Select messages to keep, prioritizing by importance score
     let keptTokens = 0;
     const messagesToKeep = [];
+    const keptIndices = new Set();
 
-    for (let i = restMessages.length - 1; i >= 0; i--) {
-      const msgTokens = estimateMessageTokens(restMessages[i]);
-      if (messagesToKeep.length >= MIN_KEEP_MESSAGES && keptTokens + msgTokens > targetTokens) {
+    for (const scored of scoredMessages) {
+      if (keptTokens + scored.tokens > targetTokens && messagesToKeep.length >= MIN_KEEP_MESSAGES) {
         break;
       }
-      messagesToKeep.unshift(restMessages[i]);
-      keptTokens += msgTokens;
+      messagesToKeep.push(scored);
+      keptIndices.add(scored.index);
+      keptTokens += scored.tokens;
     }
+
+    // Re-sort by original index to maintain conversation order
+    messagesToKeep.sort((a, b) => a.index - b.index);
+
+    // Extract messages in order
+    const keptMessages = messagesToKeep.map(s => s.msg);
 
     const prunedCount = restMessages.length - messagesToKeep.length;
     if (prunedCount > 0) {
       // Build a breadcrumb summarising what was pruned
-      const pruned = restMessages.slice(0, prunedCount);
+      const pruned = restMessages.filter((_, i) => !keptIndices.has(i));
       const toolsUsed = new Set();
       const userTopics = [];
 
@@ -180,55 +327,58 @@ export class ContextManager {
         _summarized: true,
       };
 
-      messagesToKeep.unshift(breadcrumb);
+      keptMessages.unshift(breadcrumb);
 
-      logger.info(`Pruned ${prunedCount} messages from conversation history`);
+      logger.info(`Pruned ${prunedCount} messages from conversation history (importance-based)`);
       this.lastPromptTokens = 0;
     }
 
-    const result = systemMsg ? [systemMsg, ...messagesToKeep] : messagesToKeep;
+    const result = systemMsg ? [systemMsg, ...keptMessages] : keptMessages;
     return { messages: result, pruned: prunedCount };
   }
 
   /**
    * Create a summary of old messages to preserve context while saving tokens.
-   * Returns a condensed version of message history.
+   * Uses LLM-based summarization if available, falls back to simple extraction.
    */
-  summarizeOldMessages(messages, summarizerFn) {
+  async summarizeOldMessages(messages) {
     const status = this.getStatus(messages);
     
     if (!status.shouldSummarize || messages.length <= MIN_KEEP_MESSAGES + 2) {
       return { messages, summarized: false };
     }
     
-    // Split messages: old ones to summarize + recent ones to keep
-    const systemMsg = messages[0]?.role === 'system' ? messages[0] : null;
-    const conversationMsgs = systemMsg ? messages.slice(1) : messages;
-    
-    // Keep last N messages intact
-    const keepCount = Math.max(MIN_KEEP_MESSAGES, Math.floor(conversationMsgs.length * 0.4));
-    const toSummarize = conversationMsgs.slice(0, -keepCount);
-    const toKeep = conversationMsgs.slice(-keepCount);
+    const targetTokens = Math.floor(this.maxTokens * SUMMARY_TARGET_RATIO);
+    const { toSummarize, toKeep, systemMsg } = selectMessagesToSummarize(
+      messages,
+      targetTokens,
+      estimateMessageTokens
+    );
     
     if (toSummarize.length === 0) {
       return { messages, summarized: false };
     }
     
-    // Build summary of old messages
-    let summary = '### Previous conversation summary:\n';
-    for (const msg of toSummarize) {
-      if (msg.role === 'user') {
-        summary += `- User asked: ${truncateText(msg.content, 100)}\n`;
-      } else if (msg.role === 'assistant') {
-        summary += `- Assistant: ${truncateText(msg.content, 100)}\n`;
-      } else if (msg.role === 'tool') {
-        summary += `- Tool result received\n`;
+    let summaryContent;
+    
+    // Try LLM-based summarization if client is available
+    if (this.ollamaHost && this.llmModel) {
+      try {
+        summaryContent = await summarizeMessagesWithLLM(toSummarize, this.ollamaHost, this.llmModel);
+        logger.info(`LLM summarized ${toSummarize.length} old messages`);
+      } catch (error) {
+        logger.warn(`LLM summarization failed, using fallback: ${error.message}`);
+        summaryContent = this._createSimpleSummary(toSummarize);
       }
+    } else {
+      // Fallback to simple summarization
+      summaryContent = this._createSimpleSummary(toSummarize);
+      logger.info(`Simple summarized ${toSummarize.length} old messages`);
     }
     
     const summaryMsg = {
       role: 'user',
-      content: summary,
+      content: summaryContent,
       _summarized: true,
     };
     
@@ -236,10 +386,75 @@ export class ContextManager {
       ? [systemMsg, summaryMsg, ...toKeep]
       : [summaryMsg, ...toKeep];
     
-    logger.info(`Summarized ${toSummarize.length} old messages to save context space`);
     this.lastPromptTokens = 0; // Reset to force re-estimation
     
     return { messages: newMessages, summarized: true };
+  }
+  
+  /**
+   * Create a simple summary without LLM (fast, less context-aware).
+   */
+  _createSimpleSummary(messages) {
+    const topics = [];
+    const files = new Set();
+    const tools = new Set();
+    const decisions = [];
+
+    for (const msg of messages) {
+      // Extract file references
+      const fileMatches = msg.content?.match(/\b[\w/.-]+\.(js|ts|py|json|md|txt|yml|yaml|go|rs|java)\b/g) || [];
+      fileMatches.forEach(f => files.add(f));
+
+      // Track tools used
+      if (msg.tool_calls) {
+        msg.tool_calls.forEach(tc => {
+          if (tc.function?.name) tools.add(tc.function.name);
+        });
+      }
+      
+      // Track tool results
+      if (msg.role === 'tool' && msg.content) {
+        try {
+          const parsed = JSON.parse(msg.content);
+          if (parsed.error) tools.add(`error:${parsed.error.substring(0, 30)}`);
+        } catch {
+          // Not JSON
+        }
+      }
+
+      // Get user topics (first 80 chars of user messages)
+      if (msg.role === 'user' && msg.content && !msg._summarized) {
+        const topic = msg.content.substring(0, 80).replace(/\n/g, ' ');
+        if (topic.length > 10) topics.push(topic);
+      }
+      
+      // Track assistant decisions
+      if (msg.role === 'assistant' && msg.content) {
+        const decisionMatch = msg.content.match(/(?:created|modified|updated|deleted|added)\s+([\w/.-]+)/i);
+        if (decisionMatch) decisions.push(decisionMatch[0]);
+      }
+    }
+
+    const parts = [`${messages.length} earlier messages compacted.`];
+    
+    if (files.size > 0) {
+      const fileList = [...files].slice(0, 6).join(', ');
+      parts.push(`Files: ${fileList}${files.size > 6 ? '...' : ''}.`);
+    }
+    
+    if (tools.size > 0) {
+      parts.push(`Tools: ${[...tools].slice(0, 5).join(', ')}.`);
+    }
+    
+    if (decisions.length > 0) {
+      parts.push(`Actions: ${decisions.slice(0, 3).join('; ')}.`);
+    }
+    
+    if (topics.length > 0) {
+      parts.push(`Topics: "${topics[topics.length - 1]}"`);
+    }
+
+    return `[Context compacted: ${parts.join(' ')}]`;
   }
 
   /**

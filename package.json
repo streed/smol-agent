@@ -36,7 +36,8 @@
     "ink-text-area": "^0.0.1",
     "ink-text-input": "^6.0.0",
     "ollama": "^0.6.3",
-    "react": "^18.3.1"
+    "react": "^18.3.1",
+    "tiktoken": "^1.0.22"
   },
   "engines": {
     "node": ">=18.0.0"

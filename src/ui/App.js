@@ -98,10 +98,14 @@ function generateLoadingFrames() {
 }
 
 const LOADING_FRAMES = generateLoadingFrames();
+
 const LOADING_MESSAGES = [
-  "Gathering project context...", "Mapping the codebase...",
-  "Checking git status...", "Warming up the brain...",
-  "Preparing tools...", "Almost ready...",
+  "Gathering project context...",
+  "Mapping the codebase...",
+  "Checking git status...",
+  "Warming up the brain...",
+  "Preparing tools...",
+  "Almost ready...",
 ];
 
 // ═══ Main App ═══
@@ -219,12 +223,12 @@ export default function App({ agent, initialPrompt }) {
     };
   }, [agent]);
 
-  // Loading animation loop
+  // Loading animation loop - cycles through colors
   useEffect(() => {
     if (!isLoading) return;
     let msgIdx = 0, frameCount = 0;
     const interval = setInterval(() => {
-      setLoadingFrame((f) => (f + 1) % LOADING_FRAMES.length);
+      setLoadingFrame((f) => f + 1);
       frameCount++;
       if (frameCount % 10 === 0) {
         setLoadingMessage(LOADING_MESSAGES[msgIdx]);
@@ -382,7 +386,7 @@ export default function App({ agent, initialPrompt }) {
       ),
       e(Text, { dimColor: true }, headerBot),
       e(Box, { flexDirection: "column", alignItems: "center", marginTop: 2 },
-        ...LOADING_FRAMES[loadingFrame].map((line, i) =>
+        ...LOADING_FRAMES[loadingFrame % LOADING_FRAMES.length].map((line, i) =>
           e(Text, { key: i, color: "cyan", bold: true }, line),
         ),
       ),

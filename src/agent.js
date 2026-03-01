@@ -3,7 +3,7 @@ import * as ollama from "./ollama.js";
 import * as registry from "./tools/registry.js";
 import { gatherContext } from "./context.js";
 import { logger } from "./logger.js";
-import { ContextManager } from "./context-manager.js";
+import { ContextManager, getContextConfig } from "./context-manager.js";
 
 // Import all tools so they self-register
 import "./tools/run_command.js";
@@ -174,6 +174,11 @@ export class Agent extends EventEmitter {
 
     setSearchClient(this.client);
     setFetchClient(this.client);
+    
+    // Set up LLM-based summarization if model is large enough (has all tools)
+    if (!coreToolsOnly) {
+      this.contextManager.setLLMClient(host, this.model);
+    }
   }
 
   /** Get current token usage info. */
@@ -240,10 +245,27 @@ export class Agent extends EventEmitter {
   async run(userMessage) {
     await this._init();
 
-    // Check and prune conversation if approaching limit
+    // Check and summarize/prune conversation if approaching limit
     const status = this.contextManager.getStatus(this.messages);
-    if (status.shouldPrune) {
-      logger.warn(`Context at ${status.usage.percentage}% - pruning conversation`);
+    
+    // Try summarization first if at 55% capacity
+    if (status.shouldSummarize && this.messages.length > 8) {
+      logger.info(`Context at ${status.usage.percentage}% - summarizing old messages`);
+      try {
+        const result = await this.contextManager.summarizeOldMessages(this.messages);
+        if (result.summarized) {
+          this.messages = result.messages;
+          this.emit("token_usage", this.getTokenInfo());
+        }
+      } catch (error) {
+        logger.warn(`Summarization failed: ${error.message}`);
+      }
+    }
+    
+    // Then prune if still needed (at 70% capacity)
+    const updatedStatus = this.contextManager.getStatus(this.messages);
+    if (updatedStatus.shouldPrune) {
+      logger.warn(`Context at ${updatedStatus.usage.percentage}% - pruning conversation`);
       const result = this.contextManager.pruneMessages(this.messages);
       this.messages = result.messages;
       this.emit("token_usage", this.getTokenInfo());
