@@ -23,6 +23,13 @@ jobs:
           - starcoder2:7b        # BigCode's model trained on diverse code repos
 
     steps:
+      - name: Sanitize model name for artifacts
+        id: sanitize
+        run: |
+          # Replace colons with hyphens for artifact names
+          SANITIZED=$(echo "${{ matrix.model }}" | sed 's/:/-/g')
+          echo "model_name=$SANITIZED" >> $GITHUB_OUTPUT
+
       - name: Checkout code
         uses: actions/checkout@v4
 
@@ -81,7 +88,7 @@ jobs:
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: results-${{ matrix.model }}-${{ github.sha }}
+          name: results-${{ steps.sanitize.outputs.model_name }}
           path: results.json
           retention-days: 30
 
@@ -125,6 +132,13 @@ jobs:
     if: always()
 
     steps:
+      - name: Sanitize run ID for artifacts
+        id: sanitize
+        run: |
+          # Use short SHA for artifact name
+          SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+          echo "short_sha=$SHORT_SHA" >> $GITHUB_OUTPUT
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
@@ -139,7 +153,7 @@ jobs:
 
           for dir in results/results-*; do
             if [ -f "$dir/results.json" ]; then
-              model=$(basename "$dir" | sed 's/results-//' | sed 's/-[a-f0-9]*$//')
+              model=$(basename "$dir" | sed 's/results-//')
               score=$(jq -r '.aggregate.normalized' "$dir/results.json")
               passed=$(jq -r '.aggregate.passed' "$dir/results.json")
               total=$(jq -r '.aggregate.total' "$dir/results.json")
@@ -153,7 +167,7 @@ jobs:
       - name: Upload summary
         uses: actions/upload-artifact@v4
         with:
-          name: benchmark-summary-${{ github.sha }}
+          name: benchmark-summary-${{ steps.sanitize.outputs.short_sha }}
           path: summary.md
 
       - name: Post summary to PR
