@@ -1,0 +1,172 @@
+name: Model Benchmark
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Test ${{ matrix.model }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Coding-focused models <10B params for fast CI/CD testing
+        # These models are specifically trained for code generation and understanding
+        model:
+          - qwen2.5-coder:7b     # Alibaba's code-specialized model, excellent performance
+          - deepseek-coder:6.7b  # DeepSeek's coding model, strong at code tasks
+          - codellama:7b         # Meta's code-specialized Llama variant
+          - starcoder2:7b        # BigCode's model trained on diverse code repos
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Ollama
+        run: |
+          curl -fsSL https://ollama.com/install.sh | sh
+          # Start Ollama in background
+          ollama serve &
+          # Wait for Ollama to be ready
+          sleep 5
+
+      - name: Pull model
+        run: |
+          echo "Pulling ${{ matrix.model }}..."
+          ollama pull ${{ matrix.model }}
+          ollama list
+
+      - name: Run E2E tests
+        id: test
+        continue-on-error: true
+        env:
+          SMOL_TEST_MODEL: ${{ matrix.model }}
+          SMOL_TEST_RETRIES: 1
+          SMOL_TEST_MAX_ITER: 20
+          SMOL_TEST_CTX: 16384
+        run: |
+          node test/e2e/runner.js --json > results.json 2>&1 || true
+          cat results.json
+
+      - name: Extract results
+        id: results
+        run: |
+          if [ -f results.json ]; then
+            SCORE=$(jq -r '.aggregate.normalized' results.json)
+            PASSED=$(jq -r '.aggregate.passed' results.json)
+            TOTAL=$(jq -r '.aggregate.total' results.json)
+            echo "score=$SCORE" >> $GITHUB_OUTPUT
+            echo "passed=$PASSED" >> $GITHUB_OUTPUT
+            echo "total=$TOTAL" >> $GITHUB_OUTPUT
+          else
+            echo "score=0" >> $GITHUB_OUTPUT
+            echo "passed=0" >> $GITHUB_OUTPUT
+            echo "total=0" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Upload results artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: results-${{ matrix.model }}-${{ github.sha }}
+          path: results.json
+          retention-days: 30
+
+      - name: Comment test summary
+        if: github.event_name == 'pull_request' && always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let summary = '';
+
+            try {
+              const results = JSON.parse(fs.readFileSync('results.json', 'utf8'));
+              const { aggregate, results: scenarios } = results;
+
+              summary = `### 🤖 Model: \`${{ matrix.model }}\`\n\n`;
+              summary += `**Score:** ${aggregate.normalized.toFixed(3)} (${aggregate.passed}/${aggregate.total} passed)\n\n`;
+
+              const failed = scenarios.filter(s => !s.passed);
+              if (failed.length > 0) {
+                summary += `#### ❌ Failed scenarios:\n`;
+                failed.forEach(s => {
+                  summary += `- ${s.name}: ${s.score.toFixed(2)} (${s.error || 'checks failed'})\n`;
+                });
+              }
+            } catch (e) {
+              summary = `### 🤖 Model: \`${{ matrix.model }}\`\n\n❌ Tests failed to run: ${e.message}`;
+            }
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: summary
+            });
+
+  aggregate:
+    name: Aggregate Results
+    needs: test
+    runs-on: ubuntu-latest
+    if: always()
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: results
+
+      - name: Generate comparison table
+        run: |
+          echo "# 🎯 Model Benchmark Results" > summary.md
+          echo "" >> summary.md
+          echo "| Model | Score | Passed | Total | % |" >> summary.md
+          echo "|-------|-------|--------|-------|---|" >> summary.md
+
+          for dir in results/results-*; do
+            if [ -f "$dir/results.json" ]; then
+              model=$(basename "$dir" | sed 's/results-//' | sed 's/-[a-f0-9]*$//')
+              score=$(jq -r '.aggregate.normalized' "$dir/results.json")
+              passed=$(jq -r '.aggregate.passed' "$dir/results.json")
+              total=$(jq -r '.aggregate.total' "$dir/results.json")
+              percent=$(echo "scale=1; $passed * 100 / $total" | bc)
+              echo "| $model | $score | $passed | $total | ${percent}% |" >> summary.md
+            fi
+          done
+
+          cat summary.md
+
+      - name: Upload summary
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-summary-${{ github.sha }}
+          path: summary.md
+
+      - name: Post summary to PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const summary = fs.readFileSync('summary.md', 'utf8');
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: summary
+            });
