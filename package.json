@@ -27,7 +27,11 @@
   },
   "homepage": "https://github.com/smol-ai/smol-agent#readme",
   "scripts": {
-    "start": "node src/index.js"
+    "start": "node src/index.js",
+    "test": "node --test test/unit/*.test.js",
+    "test:e2e": "node test/e2e/runner.js",
+    "test:e2e:json": "node test/e2e/runner.js --json",
+    "test:all": "npm test && npm run test:e2e"
   },
   "dependencies": {
     "glob": "^11.0.1",
