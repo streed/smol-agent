@@ -10,11 +10,12 @@
 set -e
 
 # Default Ollama cloud models (fast, reliable, coding-optimized)
+# When OLLAMA_HOST=https://ollama.com, these run on cloud infrastructure
 DEFAULT_MODELS=(
-  "qwen3-coder-next:cloud"
-  "devstral-small-2:cloud"
-  "rnj-1:cloud"
-  "ministral-3:cloud"
+  "qwen3-coder-next"
+  "devstral-small-2:24b"
+  "rnj-1:8b"
+  "ministral-3:8b"
 )
 
 # Parse arguments
@@ -66,9 +67,9 @@ for model in "${MODELS[@]}"; do
   echo "Testing model: $model"
   echo "─────────────────────────────────────────────────────────────"
 
-  # Check if it's a cloud model
-  if [[ "$model" == *":cloud" ]]; then
-    echo "☁️  Using Ollama cloud model - no pull needed"
+  # Check if using cloud (based on OLLAMA_HOST)
+  if [[ "$OLLAMA_HOST" == *"ollama.com"* ]]; then
+    echo "☁️  Using Ollama cloud API - no pull needed"
     if [ -z "$OLLAMA_API_KEY" ]; then
       echo "⚠️  Warning: OLLAMA_API_KEY not set"
       echo "   Cloud models require an API key from https://ollama.com"

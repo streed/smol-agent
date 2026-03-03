@@ -135,10 +135,10 @@ The `.github/workflows/model-benchmark.yml` workflow tests the agent against **O
 
 | Model | Size | Strengths |
 |-------|------|-----------|
-| **qwen3-coder-next:cloud** | Large | Optimized for agentic coding workflows, local dev |
-| **devstral-small-2:cloud** | 24B | Excels at tools, multi-file edits, codebase exploration |
-| **rnj-1:cloud** | 8B | Optimized for code and STEM, SOTA performance |
-| **ministral-3:cloud** | 3-14B | Edge deployment, vision and tool support |
+| **qwen3-coder-next** | ~80B | Optimized for agentic coding workflows, local dev |
+| **devstral-small-2:24b** | 24B | Excels at tools, multi-file edits, codebase exploration |
+| **rnj-1:8b** | 8B | Optimized for code and STEM, SOTA performance |
+| **ministral-3:8b** | 8B | Edge deployment, vision and tool support |
 
 **Benefits of Cloud Models**:
 - ⚡ Much faster than local models (datacenter GPUs)
@@ -172,13 +172,13 @@ export OLLAMA_API_KEY="your-api-key-here"  # Get from https://ollama.com
 export OLLAMA_HOST="https://ollama.com"
 
 # Test a single cloud model
-SMOL_TEST_MODEL=qwen3-coder-next:cloud npm run test:e2e
+SMOL_TEST_MODEL=qwen3-coder-next npm run test:e2e
 
 # Run full benchmark with all 4 cloud models
 ./test/e2e/benchmark.sh
 
 # Or run with specific models
-./test/e2e/benchmark.sh qwen3-coder-next:cloud devstral-small-2:cloud
+./test/e2e/benchmark.sh qwen3-coder-next devstral-small-2:24b
 
 # Quick benchmark (1 retry instead of 2)
 ./test/e2e/benchmark.sh --quick
