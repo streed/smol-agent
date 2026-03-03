@@ -9,12 +9,12 @@
 
 set -e
 
-# Default models to test (<10B params, tool support required)
+# Default Ollama cloud models (fast, reliable, coding-optimized)
 DEFAULT_MODELS=(
-  "qwen2.5-coder:7b"
-  "qwen2.5-coder:3b"
-  "qwen2.5-coder:1.5b"
-  "llama3.2:3b"
+  "qwen3-coder-next:cloud"
+  "devstral-small-2:cloud"
+  "rnj-1:cloud"
+  "ministral-3:cloud"
 )
 
 # Parse arguments
@@ -66,15 +66,24 @@ for model in "${MODELS[@]}"; do
   echo "Testing model: $model"
   echo "─────────────────────────────────────────────────────────────"
 
-  # Check if model is available
-  if ! ollama list | grep -q "^${model%%:*}"; then
-    echo "⚠️  Model not found. Pulling $model..."
-    ollama pull "$model" || {
-      echo "❌ Failed to pull model: $model"
-      echo "   Skipping..."
-      echo ""
-      continue
-    }
+  # Check if it's a cloud model
+  if [[ "$model" == *":cloud" ]]; then
+    echo "☁️  Using Ollama cloud model - no pull needed"
+    if [ -z "$OLLAMA_API_KEY" ]; then
+      echo "⚠️  Warning: OLLAMA_API_KEY not set"
+      echo "   Cloud models require an API key from https://ollama.com"
+    fi
+  else
+    # Local model - check if available
+    if ! ollama list | grep -q "^${model%%:*}"; then
+      echo "⚠️  Model not found. Pulling $model..."
+      ollama pull "$model" || {
+        echo "❌ Failed to pull model: $model"
+        echo "   Skipping..."
+        echo ""
+        continue
+      }
+    fi
   fi
 
   # Run tests

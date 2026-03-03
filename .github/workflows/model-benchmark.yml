@@ -11,16 +11,17 @@ jobs:
   test:
     name: Test ${{ matrix.model }}
     runs-on: ubuntu-latest
+    environment: Model Test
     strategy:
       fail-fast: false
       matrix:
-        # Models <10B params that support tool/function calling
-        # All Qwen2.5 models have native tool support
+        # Ollama cloud models - fast, reliable, optimized for coding
+        # https://ollama.com/search?c=cloud
         model:
-          - qwen2.5-coder:7b     # 7B, code-specialized, excellent tool use
-          - qwen2.5-coder:3b     # 3B, code-specialized, good balance
-          - qwen2.5-coder:1.5b   # 1.5B, code-specialized, fast
-          - llama3.2:3b          # 3B, general purpose with tool support
+          - qwen3-coder-next:cloud    # Optimized for agentic coding workflows
+          - devstral-small-2:cloud    # 24B, excels at tools & multi-file edits
+          - rnj-1:cloud               # 8B, optimized for code and STEM
+          - ministral-3:cloud         # 3-14B, edge deployment with tool support
 
     steps:
       - name: Sanitize model name for artifacts
@@ -42,32 +43,48 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Install Ollama
+      - name: Validate API Key
         run: |
-          curl -fsSL https://ollama.com/install.sh | sh
-          # Start Ollama in background
-          ollama serve &
-          # Wait for Ollama to be ready
-          sleep 5
+          if [ -z "${{ secrets.OLLAMA_API_KEY }}" ]; then
+            echo "❌ Error: OLLAMA_API_KEY not found in 'Model Test' environment"
+            echo "Please add OLLAMA_API_KEY to Settings → Environments → Model Test → Secrets"
+            exit 1
+          fi
+          echo "✅ OLLAMA_API_KEY is configured"
 
-      - name: Pull model
+      - name: Setup Ollama Cloud
         run: |
-          echo "Pulling ${{ matrix.model }}..."
-          ollama pull ${{ matrix.model }}
-          ollama list
+          # Install Ollama client
+          curl -fsSL https://ollama.com/install.sh | sh
+
+          # Configure for cloud usage (uses OLLAMA_API_KEY from environment secrets)
+          echo "Using Ollama cloud models - no local pull needed"
+          echo "Model: ${{ matrix.model }}"
+          echo "Host: https://ollama.com"
+
+        env:
+          OLLAMA_API_KEY: ${{ secrets.OLLAMA_API_KEY }}
 
       - name: Run E2E tests
         id: test
         continue-on-error: true
         env:
+          # Model configuration
           SMOL_TEST_MODEL: ${{ matrix.model }}
+
+          # Ollama cloud API (from 'Model Test' environment secrets)
+          OLLAMA_API_KEY: ${{ secrets.OLLAMA_API_KEY }}
+          OLLAMA_HOST: https://ollama.com
+
+          # Test parameters
           SMOL_TEST_RETRIES: 1
-          SMOL_TEST_MAX_ITER: 10
-          SMOL_TEST_CTX: 16384
-          # Very high timeouts for CI/CD - small models are much slower
-          SMOL_TEST_TIMEOUT_SIMPLE: 600000    # 10 minutes
-          SMOL_TEST_TIMEOUT_MEDIUM: 900000    # 15 minutes
-          SMOL_TEST_TIMEOUT_COMPLEX: 1200000  # 20 minutes
+          SMOL_TEST_MAX_ITER: 20
+          SMOL_TEST_CTX: 32768
+
+          # Cloud models are much faster - reasonable timeouts
+          SMOL_TEST_TIMEOUT_SIMPLE: 180000    # 3 minutes
+          SMOL_TEST_TIMEOUT_MEDIUM: 300000    # 5 minutes
+          SMOL_TEST_TIMEOUT_COMPLEX: 420000   # 7 minutes
         run: |
           echo "=========================================="
           echo "Testing model: ${{ matrix.model }}"

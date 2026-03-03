@@ -131,16 +131,35 @@ node test/e2e/runner.js --json > results.json
 
 ## Model Benchmark (GitHub Actions)
 
-The `.github/workflows/model-benchmark.yml` workflow tests the agent against multiple models with **tool/function calling support** (<10B parameters):
+The `.github/workflows/model-benchmark.yml` workflow tests the agent against **Ollama cloud models** - fast, reliable, and optimized for coding:
 
-| Model | Size | Tool Support | Strengths |
-|-------|------|--------------|-----------|
-| **qwen2.5-coder:7b** | 7B | ✅ Native | Excellent at complex refactoring, multi-file changes |
-| **qwen2.5-coder:3b** | 3B | ✅ Native | Good balance of speed and capability |
-| **qwen2.5-coder:1.5b** | 1.5B | ✅ Native | Fast, suitable for simpler tasks |
-| **llama3.2:3b** | 3B | ✅ Native | General purpose with solid tool use |
+| Model | Size | Strengths |
+|-------|------|-----------|
+| **qwen3-coder-next:cloud** | Large | Optimized for agentic coding workflows, local dev |
+| **devstral-small-2:cloud** | 24B | Excels at tools, multi-file edits, codebase exploration |
+| **rnj-1:cloud** | 8B | Optimized for code and STEM, SOTA performance |
+| **ministral-3:cloud** | 3-14B | Edge deployment, vision and tool support |
 
-**Important**: All models must support tool/function calling for the agent to work. The Qwen2.5 family has excellent native tool support.
+**Benefits of Cloud Models**:
+- ⚡ Much faster than local models (datacenter GPUs)
+- 🎯 Optimized for coding and tool use
+- 🔧 Larger models available (up to 123B+)
+- ✅ Reliable performance for CI/CD
+
+**GitHub Actions Setup**:
+1. Create "Model Test" environment in repository settings
+2. Add `OLLAMA_API_KEY` secret to the environment
+3. See [Environment Setup Guide](../.github/ENVIRONMENT_SETUP.md) for details
+
+**Local Setup**:
+```bash
+export OLLAMA_API_KEY="your-key"  # Get from https://ollama.com/pricing
+export OLLAMA_HOST="https://ollama.com"
+```
+
+Sources:
+- [Cloud Models - Ollama](https://ollama.com/search?c=cloud)
+- [Ollama Cloud Documentation](https://docs.ollama.com/cloud)
 
 ### Running Benchmarks
 
@@ -148,20 +167,24 @@ The `.github/workflows/model-benchmark.yml` workflow tests the agent against mul
 # Trigger manually via GitHub UI
 # Or push to main/create PR to run automatically
 
-# Pull a model first (must support tools)
-ollama pull qwen2.5-coder:7b
+# Setup for cloud models
+export OLLAMA_API_KEY="your-api-key-here"  # Get from https://ollama.com
+export OLLAMA_HOST="https://ollama.com"
 
-# Test a single model quickly
-SMOL_TEST_MODEL=qwen2.5-coder:7b npm run test:e2e
+# Test a single cloud model
+SMOL_TEST_MODEL=qwen3-coder-next:cloud npm run test:e2e
 
-# Run full benchmark with all 4 models
+# Run full benchmark with all 4 cloud models
 ./test/e2e/benchmark.sh
 
 # Or run with specific models
-./test/e2e/benchmark.sh qwen2.5-coder:7b qwen2.5-coder:3b
+./test/e2e/benchmark.sh qwen3-coder-next:cloud devstral-small-2:cloud
 
 # Quick benchmark (1 retry instead of 2)
 ./test/e2e/benchmark.sh --quick
+
+# Test with local model (no API key needed)
+SMOL_TEST_MODEL=qwen2.5-coder:7b npm run test:e2e
 ```
 
 ### Benchmark Results

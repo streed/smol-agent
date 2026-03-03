@@ -2,22 +2,26 @@
 
 ## Model Performance Expectations
 
-Different model sizes will have different success rates:
+### Ollama Cloud Models (Recommended)
+- **Expected pass rate**: 85-98%
+- **Speed**: Fast (datacenter GPUs)
+- **Strengths**: All scenarios, especially complex multi-step tasks
+- **Note**: Requires OLLAMA_API_KEY
 
-### Large Models (7B+)
-- **Expected pass rate**: 80-95%
-- **Speed**: Moderate to fast
+### Local Large Models (7B+)
+- **Expected pass rate**: 70-85%
+- **Speed**: Moderate
 - **Strengths**: Complex refactoring, multi-step tasks, edge cases
 
-### Medium Models (3B-7B)
-- **Expected pass rate**: 60-80%
-- **Speed**: Moderate
+### Local Medium Models (3B-7B)
+- **Expected pass rate**: 50-70%
+- **Speed**: Slow
 - **Strengths**: Basic file operations, simple refactoring
 - **Challenges**: Complex multi-step tasks, large context
 
-### Small Models (1.5B-3B)
-- **Expected pass rate**: 40-60%
-- **Speed**: Slow (high timeout needed)
+### Local Small Models (1.5B-3B)
+- **Expected pass rate**: 30-50%
+- **Speed**: Very slow (high timeout needed)
 - **Strengths**: Simple CRUD operations
 - **Challenges**: Complex reasoning, multi-step coordination, error recovery
 
@@ -55,12 +59,13 @@ SMOL_TEST_MODEL=qwen2.5-coder:7b npm run test:e2e
 ## CI/CD Considerations
 
 The GitHub Actions workflow:
-- Uses generous timeouts (10-20 minutes per scenario)
-- Limits to 10 iterations to prevent runaway loops
-- Runs all 32 scenarios regardless of model size
-- **Expected total runtime**: 2-6 hours depending on model
+- Uses Ollama cloud models for speed and reliability
+- Moderate timeouts (3-7 minutes per scenario)
+- Limits to 20 iterations to prevent runaway loops
+- Runs all 32 scenarios
+- **Expected total runtime**: 30-90 minutes (much faster with cloud models)
 
-This is intentional to give a comprehensive benchmark, but may not be suitable for every PR.
+Cloud models are recommended for CI/CD to avoid slow local model execution.
 
 ## Interpreting Results
 
