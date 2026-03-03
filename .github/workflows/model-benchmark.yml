@@ -14,13 +14,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Coding-focused models <10B params for fast CI/CD testing
-        # These models are specifically trained for code generation and understanding
+        # Models <10B params that support tool/function calling
+        # All Qwen2.5 models have native tool support
         model:
-          - qwen2.5-coder:7b     # Alibaba's code-specialized model, excellent performance
-          - deepseek-coder:6.7b  # DeepSeek's coding model, strong at code tasks
-          - codellama:7b         # Meta's code-specialized Llama variant
-          - starcoder2:7b        # BigCode's model trained on diverse code repos
+          - qwen2.5-coder:7b     # 7B, code-specialized, excellent tool use
+          - qwen2.5-coder:3b     # 3B, code-specialized, good balance
+          - qwen2.5-coder:1.5b   # 1.5B, code-specialized, fast
+          - llama3.2:3b          # 3B, general purpose with tool support
 
     steps:
       - name: Sanitize model name for artifacts

@@ -116,16 +116,16 @@ node test/e2e/runner.js --json > results.json
 
 ## Model Benchmark (GitHub Actions)
 
-The `.github/workflows/model-benchmark.yml` workflow tests the agent against multiple coding-focused models (<10B parameters):
+The `.github/workflows/model-benchmark.yml` workflow tests the agent against multiple models with **tool/function calling support** (<10B parameters):
 
-| Model | Size | Training Focus | Strengths |
-|-------|------|----------------|-----------|
-| **qwen2.5-coder:7b** | 7B | Code generation | Excellent at complex refactoring, multi-file changes |
-| **deepseek-coder:6.7b** | 6.7B | Coding tasks | Strong at algorithm implementation, debugging |
-| **codellama:7b** | 7B | Code specialization | Good balance, reliable for general coding tasks |
-| **starcoder2:7b** | 7B | Diverse code repos | Excels at multi-language support, idiomatic code |
+| Model | Size | Tool Support | Strengths |
+|-------|------|--------------|-----------|
+| **qwen2.5-coder:7b** | 7B | ✅ Native | Excellent at complex refactoring, multi-file changes |
+| **qwen2.5-coder:3b** | 3B | ✅ Native | Good balance of speed and capability |
+| **qwen2.5-coder:1.5b** | 1.5B | ✅ Native | Fast, suitable for simpler tasks |
+| **llama3.2:3b** | 3B | ✅ Native | General purpose with solid tool use |
 
-These models are specifically trained for code, making them ideal for testing a coding agent.
+**Important**: All models must support tool/function calling for the agent to work. The Qwen2.5 family has excellent native tool support.
 
 ### Running Benchmarks
 
@@ -133,29 +133,20 @@ These models are specifically trained for code, making them ideal for testing a 
 # Trigger manually via GitHub UI
 # Or push to main/create PR to run automatically
 
-# Pull a coder model first
+# Pull a model first (must support tools)
 ollama pull qwen2.5-coder:7b
 
 # Test a single model quickly
 SMOL_TEST_MODEL=qwen2.5-coder:7b npm run test:e2e
 
-# Run full benchmark with all 4 coder models
+# Run full benchmark with all 4 models
 ./test/e2e/benchmark.sh
 
 # Or run with specific models
-./test/e2e/benchmark.sh qwen2.5-coder:7b deepseek-coder:6.7b
+./test/e2e/benchmark.sh qwen2.5-coder:7b qwen2.5-coder:3b
 
 # Quick benchmark (1 retry instead of 2)
 ./test/e2e/benchmark.sh --quick
-
-# Manual multi-model test
-for model in qwen2.5-coder:7b deepseek-coder:6.7b codellama:7b starcoder2:7b; do
-  echo "Testing $model..."
-  SMOL_TEST_MODEL=$model npm run test:e2e:json > "results-$model.json"
-done
-
-# Compare results across models
-node test/e2e/compare-results.js results-*.json
 ```
 
 ### Benchmark Results

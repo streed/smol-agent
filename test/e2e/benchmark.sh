@@ -9,12 +9,12 @@
 
 set -e
 
-# Default coder models to test (<10B params)
+# Default models to test (<10B params, tool support required)
 DEFAULT_MODELS=(
   "qwen2.5-coder:7b"
-  "deepseek-coder:6.7b"
-  "codellama:7b"
-  "starcoder2:7b"
+  "qwen2.5-coder:3b"
+  "qwen2.5-coder:1.5b"
+  "llama3.2:3b"
 )
 
 # Parse arguments
