@@ -9,10 +9,11 @@ export const config = {
   host: process.env.OLLAMA_HOST || "http://127.0.0.1:11434",
 
   // Per-scenario timeout tiers (ms) — can be overridden via env vars
+  // Defaults are generous for small/slow models
   timeouts: {
-    simple: parseInt(process.env.SMOL_TEST_TIMEOUT_SIMPLE, 10) || 120_000,
-    medium: parseInt(process.env.SMOL_TEST_TIMEOUT_MEDIUM, 10) || 240_000,
-    complex: parseInt(process.env.SMOL_TEST_TIMEOUT_COMPLEX, 10) || 360_000,
+    simple: parseInt(process.env.SMOL_TEST_TIMEOUT_SIMPLE, 10) || 300_000,   // 5 min
+    medium: parseInt(process.env.SMOL_TEST_TIMEOUT_MEDIUM, 10) || 600_000,   // 10 min
+    complex: parseInt(process.env.SMOL_TEST_TIMEOUT_COMPLEX, 10) || 900_000, // 15 min
   },
 
   // Max agent loop iterations per run — prevents runaway loops

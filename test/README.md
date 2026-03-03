@@ -101,20 +101,20 @@ SMOL_TEST_MAX_ITER=30
 SMOL_TEST_CTX=32768
 
 # Timeout overrides (in milliseconds)
-SMOL_TEST_TIMEOUT_SIMPLE=120000   # Default: 2 minutes
-SMOL_TEST_TIMEOUT_MEDIUM=240000   # Default: 4 minutes
-SMOL_TEST_TIMEOUT_COMPLEX=360000  # Default: 6 minutes
+SMOL_TEST_TIMEOUT_SIMPLE=300000   # Default: 5 minutes
+SMOL_TEST_TIMEOUT_MEDIUM=600000   # Default: 10 minutes
+SMOL_TEST_TIMEOUT_COMPLEX=900000  # Default: 15 minutes
 ```
 
 ### Default Timeouts
 
-| Complexity | Default Timeout | CI/CD Timeout |
-|------------|-----------------|---------------|
-| Simple     | 2 minutes       | 3 minutes     |
-| Medium     | 4 minutes       | 5 minutes     |
-| Complex    | 6 minutes       | 7 minutes     |
+| Complexity | Default Timeout | CI/CD Timeout | Notes |
+|------------|-----------------|---------------|-------|
+| Simple     | 5 minutes       | 10 minutes    | Basic operations |
+| Medium     | 10 minutes      | 15 minutes    | Multi-step tasks |
+| Complex    | 15 minutes      | 20 minutes    | Advanced scenarios |
 
-CI/CD uses higher timeouts to accommodate slower execution in GitHub Actions.
+**Note**: Smaller models (1.5B-3B) are significantly slower than larger models and need generous timeouts. CI/CD uses even higher timeouts due to slower runners.
 
 ## Running Specific Scenarios
 
