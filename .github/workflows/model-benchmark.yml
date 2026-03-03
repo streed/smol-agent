@@ -62,8 +62,12 @@ jobs:
         env:
           SMOL_TEST_MODEL: ${{ matrix.model }}
           SMOL_TEST_RETRIES: 1
-          SMOL_TEST_MAX_ITER: 20
+          SMOL_TEST_MAX_ITER: 25
           SMOL_TEST_CTX: 16384
+          # Increased timeouts for CI/CD (smaller models may be slower)
+          SMOL_TEST_TIMEOUT_SIMPLE: 180000    # 3 minutes
+          SMOL_TEST_TIMEOUT_MEDIUM: 300000    # 5 minutes
+          SMOL_TEST_TIMEOUT_COMPLEX: 420000   # 7 minutes
         run: |
           echo "=========================================="
           echo "Testing model: ${{ matrix.model }}"

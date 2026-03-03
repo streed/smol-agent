@@ -85,8 +85,8 @@ The E2E test suite contains 32 scenarios covering various agent capabilities:
 Configure tests via environment variables:
 
 ```bash
-# Model to test
-SMOL_TEST_MODEL=qwen2.5:7b
+# Model to test (must support tools)
+SMOL_TEST_MODEL=qwen2.5-coder:7b
 
 # Ollama host
 OLLAMA_HOST=http://localhost:11434
@@ -99,7 +99,22 @@ SMOL_TEST_MAX_ITER=30
 
 # Context window size for test agents
 SMOL_TEST_CTX=32768
+
+# Timeout overrides (in milliseconds)
+SMOL_TEST_TIMEOUT_SIMPLE=120000   # Default: 2 minutes
+SMOL_TEST_TIMEOUT_MEDIUM=240000   # Default: 4 minutes
+SMOL_TEST_TIMEOUT_COMPLEX=360000  # Default: 6 minutes
 ```
+
+### Default Timeouts
+
+| Complexity | Default Timeout | CI/CD Timeout |
+|------------|-----------------|---------------|
+| Simple     | 2 minutes       | 3 minutes     |
+| Medium     | 4 minutes       | 5 minutes     |
+| Complex    | 6 minutes       | 7 minutes     |
+
+CI/CD uses higher timeouts to accommodate slower execution in GitHub Actions.
 
 ## Running Specific Scenarios
 
