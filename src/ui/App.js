@@ -14,7 +14,7 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { setAskHandler } from "../tools/ask_user.js";
 import { saveSetting } from "../settings.js";
-import * as ollama from "../ollama.js";
+import { listModels } from "../ollama.js";
 
 // ═══ Loading animation (SMOL AGENT rain effect) ═══
 
@@ -385,7 +385,7 @@ export function startApp(agent, initialPrompt) {
         addLog(chalk.dim(`    ⎿  Current model: ${agent.model}`));
       } else if (parts[1] === "?" || parts[1] === "list") {
         try {
-          const models = await ollama.listModels(agent.client);
+          const models = await listModels(agent.client);
           if (models.length === 0) {
             addLog(chalk.dim("    ⎿  No models found. Pull a model with: ollama pull <model>"));
           } else {
