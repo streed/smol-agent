@@ -1,0 +1,155 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="660" height="490" viewBox="0 0 660 490">
+  <style>
+    .title { font: bold 24px sans-serif; fill: #111827; }
+    .subtitle { font: 14px sans-serif; fill: #6b7280; }
+    .model-name { font: 500 14px sans-serif; }
+    .score { font: bold 14px sans-serif; }
+    .status { font: bold 11px sans-serif; }
+  </style>
+  
+  <!-- Background -->
+  <rect width="100%" height="100%" fill="white"/>
+  
+  <!-- Header -->
+  <text x="40" y="35" class="title">✅ Model Benchmark Results</text>
+  <text x="40" y="55" class="subtitle">Run #14 • Mar 3, 2026 • ce1b639 • PASSED</text>
+  
+  <!-- Legend -->
+  <g transform="translate(40, 105)">
+    <rect width="12" height="12" rx="2" fill="#22c55e"/>
+    <text x="18" y="10" font="12px sans-serif" fill="#374151">Pass</text>
+    <rect x="50" width="12" height="12" rx="2" fill="#ef4444"/>
+    <text x="68" y="10" font="12px sans-serif" fill="#374151">Fail</text>
+  </g>
+  
+  <!-- Column headers -->
+  <g transform="translate(0, 120)">
+    <text x="40" y="0" font="bold 12px sans-serif" fill="#6b7280">MODEL</text>
+    <text x="220" y="0" font="bold 12px sans-serif" fill="#6b7280">RESULT</text>
+  </g>
+  
+  <!-- Divider -->
+  <line x1="40" y1="135" x2="620" y2="135" stroke="#e5e7eb" stroke-width="1"/>
+  
+  
+    <g transform="translate(0, 120)">
+      <!-- Model name -->
+      <text x="40" y="20" class="model-name" fill="#1f2937">ministral-3:3b-cloud</text>
+      
+      <!-- Progress bar background -->
+      <rect x="220" y="5" width="300" height="16" rx="4" fill="#e5e7eb"/>
+      
+      <!-- Progress bar fill -->
+      <rect x="220" y="5" width="300" height="16" rx="4" fill="#22c55e"/>
+      
+      <!-- Percentage -->
+      <text x="535" y="20" class="score" fill="#166534">100%</text>
+      
+      <!-- Status badge -->
+      <rect x="540" y="0" width="80" height="24" rx="4" fill="#dcfce7"/>
+      <text x="552" y="17" class="status" fill="#166534">PASS</text>
+    </g>
+    <g transform="translate(0, 170)">
+      <!-- Model name -->
+      <text x="40" y="20" class="model-name" fill="#1f2937">rnj-1:8b</text>
+      
+      <!-- Progress bar background -->
+      <rect x="220" y="5" width="300" height="16" rx="4" fill="#e5e7eb"/>
+      
+      <!-- Progress bar fill -->
+      <rect x="220" y="5" width="300" height="16" rx="4" fill="#22c55e"/>
+      
+      <!-- Percentage -->
+      <text x="535" y="20" class="score" fill="#166534">100%</text>
+      
+      <!-- Status badge -->
+      <rect x="540" y="0" width="80" height="24" rx="4" fill="#dcfce7"/>
+      <text x="552" y="17" class="status" fill="#166534">PASS</text>
+    </g>
+    <g transform="translate(0, 220)">
+      <!-- Model name -->
+      <text x="40" y="20" class="model-name" fill="#1f2937">qwen3-coder-next</text>
+      
+      <!-- Progress bar background -->
+      <rect x="220" y="5" width="300" height="16" rx="4" fill="#e5e7eb"/>
+      
+      <!-- Progress bar fill -->
+      <rect x="220" y="5" width="300" height="16" rx="4" fill="#22c55e"/>
+      
+      <!-- Percentage -->
+      <text x="535" y="20" class="score" fill="#166534">100%</text>
+      
+      <!-- Status badge -->
+      <rect x="540" y="0" width="80" height="24" rx="4" fill="#dcfce7"/>
+      <text x="552" y="17" class="status" fill="#166534">PASS</text>
+    </g>
+    <g transform="translate(0, 270)">
+      <!-- Model name -->
+      <text x="40" y="20" class="model-name" fill="#1f2937">ministral-3:8b</text>
+      
+      <!-- Progress bar background -->
+      <rect x="220" y="5" width="300" height="16" rx="4" fill="#e5e7eb"/>
+      
+      <!-- Progress bar fill -->
+      <rect x="220" y="5" width="300" height="16" rx="4" fill="#22c55e"/>
+      
+      <!-- Percentage -->
+      <text x="535" y="20" class="score" fill="#166534">100%</text>
+      
+      <!-- Status badge -->
+      <rect x="540" y="0" width="80" height="24" rx="4" fill="#dcfce7"/>
+      <text x="552" y="17" class="status" fill="#166534">PASS</text>
+    </g>
+    <g transform="translate(0, 320)">
+      <!-- Model name -->
+      <text x="40" y="20" class="model-name" fill="#1f2937">minimax-m2.5</text>
+      
+      <!-- Progress bar background -->
+      <rect x="220" y="5" width="300" height="16" rx="4" fill="#e5e7eb"/>
+      
+      <!-- Progress bar fill -->
+      <rect x="220" y="5" width="300" height="16" rx="4" fill="#22c55e"/>
+      
+      <!-- Percentage -->
+      <text x="535" y="20" class="score" fill="#166534">100%</text>
+      
+      <!-- Status badge -->
+      <rect x="540" y="0" width="80" height="24" rx="4" fill="#dcfce7"/>
+      <text x="552" y="17" class="status" fill="#166534">PASS</text>
+    </g>
+    <g transform="translate(0, 370)">
+      <!-- Model name -->
+      <text x="40" y="20" class="model-name" fill="#1f2937">devstral-small-2:24b</text>
+      
+      <!-- Progress bar background -->
+      <rect x="220" y="5" width="300" height="16" rx="4" fill="#e5e7eb"/>
+      
+      <!-- Progress bar fill -->
+      <rect x="220" y="5" width="300" height="16" rx="4" fill="#22c55e"/>
+      
+      <!-- Percentage -->
+      <text x="535" y="20" class="score" fill="#166534">100%</text>
+      
+      <!-- Status badge -->
+      <rect x="540" y="0" width="80" height="24" rx="4" fill="#dcfce7"/>
+      <text x="552" y="17" class="status" fill="#166534">PASS</text>
+    </g>
+    <g transform="translate(0, 420)">
+      <!-- Model name -->
+      <text x="40" y="20" class="model-name" fill="#1f2937">glm-5</text>
+      
+      <!-- Progress bar background -->
+      <rect x="220" y="5" width="300" height="16" rx="4" fill="#e5e7eb"/>
+      
+      <!-- Progress bar fill -->
+      <rect x="220" y="5" width="300" height="16" rx="4" fill="#22c55e"/>
+      
+      <!-- Percentage -->
+      <text x="535" y="20" class="score" fill="#166534">100%</text>
+      
+      <!-- Status badge -->
+      <rect x="540" y="0" width="80" height="24" rx="4" fill="#dcfce7"/>
+      <text x="552" y="17" class="status" fill="#166534">PASS</text>
+    </g>
+</svg>

@@ -176,7 +176,7 @@ smol-agent "add input validation to src/api.js"
 
 | Command | Description |
 |---------|-------------|
-| `/reset` | Clear conversation history |
+| `/clear` | Clear conversation history |
 | `exit` / `quit` | Exit the agent |
 | `Ctrl-C` | Cancel current operation / Exit on double tap |
 
@@ -228,7 +228,7 @@ The context manager keeps the system prompt and recent conversation while removi
 
 ## Context Injection
 
-When the agent starts (or after `/reset`), it automatically gathers context about the current project and injects it into the system prompt. This gives the model immediate awareness of:
+When the agent starts (or after `/clear`), it automatically gathers context about the current project and injects it into the system prompt. This gives the model immediate awareness of:
 
 - **Working directory** and **file tree** (top 2 levels, ignoring node_modules/.git/etc.)
 - **Git status** — current branch, uncommitted changes, and recent commit history
@@ -309,6 +309,66 @@ Each tool file self-registers with the registry on import. The agent imports the
 On first run, `context.js` gathers a snapshot of the project (file tree, git state, config files, README) and appends it to the system prompt. This gives the model grounding in the project before any tool calls happen.
 
 The Ink UI subscribes to `tool_call`, `tool_result`, `response`, and `error` events emitted by the agent, rendering tool activity in real time with a spinner and status text. The `ask_user` tool is wired through a promise bridge so the Ink app collects the answer inline without readline conflicts.
+
+## Model Benchmark
+
+smol-agent is tested against a variety of Ollama models to ensure it works well across different model sizes and capabilities. The benchmark runs end-to-end tests on each model, validating that tool calling, file operations, and command execution work correctly.
+
+![Model Benchmark Results](docs/benchmark-results.svg)
+
+### Tested Models
+
+| Model | Size | Best For |
+|-------|------|----------|
+| [qwen3-coder-next](https://ollama.com/library/qwen3-coder-next) | ~80B | Agentic coding workflows |
+| [devstral-small-2](https://ollama.com/library/devstral-small-2) | 24B | Tools & multi-file edits |
+| [rnj-1](https://ollama.com/library/rnj-1) | 8B | Code and STEM tasks |
+| [ministral-3:8b](https://ollama.com/library/ministral-3) | 8B | Edge deployment with tool support |
+| [ministral-3:3b](https://ollama.com/library/ministral-3) | 3B | Cloud-optimized with tool support |
+| [minimax-m2.5](https://ollama.com/library/minimax-m2.5) | ~230B | Productivity & coding |
+| [glm-5](https://ollama.com/library/glm-5) | ~744B | Reasoning & agentic tasks |
+
+### Running the Benchmark
+
+The benchmark is automated via GitHub Actions. To run it locally:
+
+```bash
+# Install dependencies
+npm install
+
+# Run E2E tests with a specific model
+SMOL_TEST_MODEL=qwen2.5-coder:7b node test/e2e/runner.js
+```
+
+### Benchmark Configuration
+
+The benchmark uses the following parameters:
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `SMOL_TEST_MODEL` | Model to test | `qwen2.5-coder:7b` |
+| `SMOL_TEST_RETRIES` | Number of retries on failure | 1 |
+| `SMOL_TEST_MAX_ITER` | Max tool call iterations per test | 20 |
+| `SMOL_TEST_CTX` | Context window size | 32768 |
+
+### Latest Results
+
+![Model Benchmark Results](docs/benchmark-results.svg)
+
+To regenerate the benchmark image after a new test run:
+
+```bash
+node scripts/generate-benchmark-image.js
+```
+
+Check the [GitHub Actions workflow](https://github.com/streed/smol-agent/actions) for the latest benchmark results. Each model run produces detailed test output showing which tasks passed or failed.
+
+### Choosing a Model
+
+- **Recommended for most users**: `qwen2.5-coder:7b` or `qwen3-coder:14b` — good balance of speed and capability
+- **For larger projects**: Use 30B+ models like `qwen3-coder:32b` or `qwen3-coder-next` for better context handling
+- **For resource-constrained environments**: `ministral-3:3b` or `rnj-1:8b` work well with limited memory
+- **For maximum capability**: `minimax-m2.5` or `glm-5` offer the strongest reasoning at the cost of slower responses
 
 ## Contributing
 

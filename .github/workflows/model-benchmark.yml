@@ -18,13 +18,12 @@ jobs:
         # Ollama cloud models - accessed via https://ollama.com API
         # Full list: curl https://ollama.com/api/tags
         model:
-          - qwen3-coder-next          # ~80B, optimized for agentic coding workflows
-          - devstral-small-2:24b      # 24B, excels at tools & multi-file edits
-          - rnj-1:8b                  # 8B, optimized for code and STEM
-          - ministral-3:8b            # 8B, edge deployment with tool support
-          - ministral-3:3b-cloud       # 3B, cloud-optimized with tool support
-          - minimax-m2.5              # ~230B, SOTA for productivity & coding
-          - glm-5                     # ~744B, strong reasoning & agentic model
+          - qwen3-coder-next # ~80B, optimized for agentic coding workflows
+          - devstral-small-2:24b # 24B, excels at tools & multi-file edits
+          - rnj-1:8b # 8B, optimized for code and STEM
+          - ministral-3:3b # 3B, cloud-optimized with tool support
+          - minimax-m2.5 # ~230B, SOTA for productivity & coding
+          - glm-5 # ~744B, strong reasoning & agentic model
 
     steps:
       - name: Sanitize model name for artifacts
@@ -40,13 +39,13 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '18'
-          cache: 'npm'
+          node-version: "18"
+          cache: "npm"
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: "3.12"
 
       - name: Install system dependencies
         run: |
@@ -95,22 +94,26 @@ jobs:
           SMOL_TEST_CTX: 32768
 
           # Cloud models are much faster - reasonable timeouts
-          SMOL_TEST_TIMEOUT_SIMPLE: 180000    # 3 minutes
-          SMOL_TEST_TIMEOUT_MEDIUM: 300000    # 5 minutes
-          SMOL_TEST_TIMEOUT_COMPLEX: 420000   # 7 minutes
+          SMOL_TEST_TIMEOUT_SIMPLE: 180000 # 3 minutes
+          SMOL_TEST_TIMEOUT_MEDIUM: 300000 # 5 minutes
+          SMOL_TEST_TIMEOUT_COMPLEX: 420000 # 7 minutes
         run: |
           echo "=========================================="
           echo "Testing model: ${{ matrix.model }}"
           echo "=========================================="
           echo ""
 
-          # Run tests normally, showing output like local
-          node test/e2e/runner.js | tee test-output.log
+          # Run tests with JSON output, capture both human-readable and JSON
+          node test/e2e/runner.js --json > test-results.json 2> test-output.log
 
           # Capture exit code
-          TEST_EXIT_CODE=${PIPESTATUS[0]}
+          TEST_EXIT_CODE=$?
           echo ""
           echo "Exit code: $TEST_EXIT_CODE"
+
+          # Also display the human-readable output
+          cat test-output.log
+
           exit $TEST_EXIT_CODE
 
       - name: Upload test output
@@ -118,7 +121,9 @@ jobs:
         if: always()
         with:
           name: test-output-${{ steps.sanitize.outputs.model_name }}
-          path: test-output.log
+          path: |
+            test-output.log
+            test-results.json
           retention-days: 30
 
   aggregate:
@@ -140,11 +145,87 @@ jobs:
         with:
           path: results
 
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+
       - name: Generate summary
         run: |
+          # Parse all JSON results and create summary
           echo "# 🎯 Model Benchmark Results" > summary.md
           echo "" >> summary.md
-          echo "Tests completed for all models. Check individual test outputs for details." >> summary.md
+
+          # Track overall pass/fail
+          PASS_COUNT=0
+          FAIL_COUNT=0
+          ERROR_COUNT=0
+          FAILED_MODELS=""
+          ERROR_MODELS=""
+
+          # Process each model's results
+          for dir in results/test-output-*; do
+            model=$(basename "$dir" | sed 's/test-output-//')
+
+            # Check if JSON exists and is valid
+            if [ ! -f "$dir/test-results.json" ]; then
+              status="⚠️ ERROR"
+              ERROR_COUNT=$((ERROR_COUNT + 1))
+              ERROR_MODELS="$ERROR_MODELS $model (no results)"
+              echo "**$model**: $status (no test-results.json found)" >> summary.md
+              continue
+            fi
+
+            # Validate JSON
+            if ! jq empty "$dir/test-results.json" 2>/dev/null; then
+              status="⚠️ ERROR"
+              ERROR_COUNT=$((ERROR_COUNT + 1))
+              ERROR_MODELS="$ERROR_MODELS $model (invalid JSON)"
+              echo "**$model**: $status (invalid JSON output)" >> summary.md
+              continue
+            fi
+
+            # Extract aggregate info from JSON
+            total=$(jq -r '.aggregate.total' "$dir/test-results.json")
+            passed=$(jq -r '.aggregate.passed' "$dir/test-results.json")
+            score=$(jq -r '.aggregate.normalized' "$dir/test-results.json")
+
+            # Validate extracted values
+            if [ -z "$total" ] || [ "$total" = "null" ]; then
+              status="⚠️ ERROR"
+              ERROR_COUNT=$((ERROR_COUNT + 1))
+              ERROR_MODELS="$ERROR_MODELS $model (missing aggregate data)"
+              echo "**$model**: $status (missing aggregate data)" >> summary.md
+              continue
+            fi
+
+            # Determine pass/fail (all tests must pass)
+            if [ "$passed" = "$total" ]; then
+              status="✅ PASS"
+              PASS_COUNT=$((PASS_COUNT + 1))
+            else
+              status="❌ FAIL"
+              FAIL_COUNT=$((FAIL_COUNT + 1))
+              FAILED_MODELS="$FAILED_MODELS $model"
+            fi
+
+            echo "**$model**: $status ($passed/$total tests passed, score: $score)" >> summary.md
+          done
+
+          echo "" >> summary.md
+          echo "---" >> summary.md
+          echo "" >> summary.md
+          echo "## Summary" >> summary.md
+          echo "" >> summary.md
+          echo "- **Passed**: $PASS_COUNT models" >> summary.md
+          echo "- **Failed**: $FAIL_COUNT models" >> summary.md
+
+          if [ -n "$FAILED_MODELS" ]; then
+            echo "- **Failed models**:$FAILED_MODELS" >> summary.md
+          fi
+
+          if [ -n "$ERROR_MODELS" ]; then
+            echo "- **Errors**:$ERROR_MODELS" >> summary.md
+          fi
+
           echo "" >> summary.md
 
           # List all test outputs
@@ -154,13 +235,25 @@ jobs:
               echo "## Model: $model" >> summary.md
               echo "" >> summary.md
               echo '```' >> summary.md
-              tail -50 "$dir/test-output.log" >> summary.md
+              tail -100 "$dir/test-output.log" >> summary.md
               echo '```' >> summary.md
               echo "" >> summary.md
             fi
           done
 
           cat summary.md
+
+          # Set job status based on results
+          if [ "$FAIL_COUNT" -gt 0 ] || [ "$ERROR_COUNT" -gt 0 ]; then
+            echo ""
+            if [ "$FAIL_COUNT" -gt 0 ]; then
+              echo "::error::Some models failed benchmarks"
+            fi
+            if [ "$ERROR_COUNT" -gt 0 ]; then
+              echo "::error::Some models had errors during testing"
+            fi
+            exit 1
+          fi
 
       - name: Upload summary
         uses: actions/upload-artifact@v4

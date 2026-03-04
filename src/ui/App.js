@@ -1,20 +1,27 @@
-import React, { useState, useEffect, useCallback, useRef } from "react";
-import { Box, Text, useApp, useInput, useStdout } from "ink";
-import { MultilineInput, useMultilineInput } from "./MultilineInput.js";
-import Spinner from "ink-spinner";
+import {
+  ProcessTerminal,
+  TUI,
+  Text,
+  Container,
+  Editor,
+  Markdown,
+  Spacer,
+  CombinedAutocompleteProvider,
+  matchesKey,
+  truncateToWidth,
+  visibleWidth,
+} from "@mariozechner/pi-tui";
+import chalk from "chalk";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { execSync } from "node:child_process";
 import { setAskHandler } from "../tools/ask_user.js";
 import { saveSetting } from "../settings.js";
-import { Markdown, processInlineFormatting } from "./markdown.js";
-import * as ollama from "../ollama.js";
+import { listModels } from "../ollama.js";
+import { readRecentLogs } from "../logger.js";
 
-const isRawModeSupported =
-  process.stdin.isTTY && typeof process.stdin.setRawMode === "function";
+// ═══ Loading animation (SMOL AGENT rain effect) ═══
 
-const e = React.createElement;
-
-// ═══ Falling Rain Animation ═══
 const PIXEL_FONT = {
   S: [" ##", "#  ", " # ", "  #", "## "],
   M: ["#   #", "## ##", "# # #", "#   #", "#   #"],
@@ -31,7 +38,6 @@ const PIXEL_FONT = {
 function generateLoadingFrames() {
   const W = 52, H = 11, NUM_FRAMES = 60, NUM_DROPS = 28;
 
-  // Build "SMOL AGENT" pixel positions centered in the grid
   const textPixels = new Set();
   let xOff = 0;
   for (const ch of "SMOL AGENT") {
@@ -50,7 +56,6 @@ function generateLoadingFrames() {
     centered.add(`${x + xShift},${y + yShift}`);
   }
 
-  // Initialize rain drops
   const drops = [];
   for (let i = 0; i < NUM_DROPS; i++) {
     drops.push({
@@ -61,14 +66,12 @@ function generateLoadingFrames() {
     });
   }
 
-  // Trail chars: head (bright) → tail (dim)
   const trail = ["▓", "▒", "░", "·", " "];
   const frames = [];
 
   for (let f = 0; f < NUM_FRAMES; f++) {
     const buf = Array.from({ length: H }, () => new Array(W).fill(" "));
 
-    // Draw rain drops
     for (const d of drops) {
       const head = Math.floor(d.row);
       for (let t = 0; t < d.len && t < trail.length; t++) {
@@ -77,7 +80,6 @@ function generateLoadingFrames() {
           buf[r][d.col] = trail[t];
         }
       }
-      // Advance
       d.row += d.speed;
       if (d.row - d.len > H) {
         d.col = Math.floor(Math.random() * W);
@@ -87,7 +89,6 @@ function generateLoadingFrames() {
       }
     }
 
-    // Draw text (solid blocks that rain flows around)
     for (const key of centered) {
       const [x, y] = key.split(",").map(Number);
       if (x >= 0 && x < W && y >= 0 && y < H) buf[y][x] = "█";
@@ -110,598 +111,228 @@ const LOADING_MESSAGES = [
   "Almost ready...",
 ];
 
-// ═══ Context Usage Bar Component ═══
-function ContextUsageBar({ usage }) {
-  const { percentage, used, max } = usage;
-  const barWidth = 10;
-  const filled = Math.round((percentage / 100) * barWidth);
-  const empty = barWidth - filled;
-  
-  // Color coding based on usage level
-  let color;
-  if (percentage > 90) color = "red";
-  else if (percentage > 75) color = "yellow";
-  else if (percentage > 50) color = "cyan";
-  else color = "green";
-  
-  // Format token counts (e.g., "45K" instead of "45000")
-  const formatTokens = (n) => {
-    if (n >= 1000) return `${Math.round(n / 1000)}K`;
-    return String(n);
-  };
-  
-  // Build the progress bar
-  const bar = "█".repeat(filled) + "░".repeat(empty);
-  
-  return e(Box, null,
-    e(Text, { dimColor: true }, "["),
-    e(Text, { color, bold: percentage > 90 }, bar),
-    e(Text, { dimColor: true }, "] "),
-    e(Text, { color, dimColor: percentage <= 75, bold: percentage > 90 }, `${percentage}%`),
-    e(Text, { dimColor: true }, " "),
-    e(Text, { dimColor: true }, `${formatTokens(used)}/${formatTokens(max)}`),
-  );
-}
-
-// ═══ Main App ═══
-
-export default function App({ agent, initialPrompt }) {
-  const { exit } = useApp();
-  const lastCtrlC = useRef(0);
-  const contextReady = useRef(false);
-  const minTimeElapsed = useRef(false);
-  const logIdRef = useRef(0);
-
-  const [log, setLog] = useState([]);
-  const [input, setInput] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [statusText, setStatusText] = useState("");
-  const [askState, setAskState] = useState(null);
-  const [approvalState, setApprovalState] = useState(null);
-  const [tokenUsage, setTokenUsage] = useState(null);
-
-  // Helper to add stable IDs to log entries (prevents React reconciliation issues)
-  const addToLog = useCallback((entry) => {
-    const id = ++logIdRef.current;
-    return (prev) => [...prev, { ...entry, id }];
-  }, []);
-
-  // Streaming state (throttled to reduce re-renders)
-  const streamRef = useRef("");
-  const [streamDisplay, setStreamDisplay] = useState("");
-  const streamThrottleRef = useRef(null);
-
-  // Loading animation
-  const [isLoading, setIsLoading] = useState(true);
-  const [loadingFrame, setLoadingFrame] = useState(0);
-  const [loadingMessage, setLoadingMessage] = useState(LOADING_MESSAGES[0]);
-
-  const { stdout } = useStdout();
-
-  // Track terminal columns for responsive layout on resize (debounced)
-  const [columns, setColumns] = useState(stdout?.columns || 80);
-  useEffect(() => {
-    let timeout;
-    const onResize = () => {
-      clearTimeout(timeout);
-      timeout = setTimeout(() => setColumns(stdout?.columns || 80), 100);
-    };
-    stdout?.on("resize", onResize);
-    return () => {
-      clearTimeout(timeout);
-      stdout?.off("resize", onResize);
-    };
-  }, [stdout]);
-
-  // Multiline input state
-  const { cursorOffset, handleInput: handleMultilineInput, pasteLineCount } = useMultilineInput(input, setInput);
-  
-  // Wire up ask_user handler
-  useEffect(() => {
-    setAskHandler((question) =>
-      new Promise((resolve) => {
-        setAskState({ question, resolve });
-        setBusy(false);
-      }),
-    );
-  }, []);
-
-  // Wire up tool approval handler
-  useEffect(() => {
-    agent.setApprovalHandler((name, args) =>
-      new Promise((resolve) => {
-        setApprovalState({ name, args, resolve });
-      }),
-    );
-  }, [agent]);
-
-  // Listen to agent events
-  useEffect(() => {
-    const onStreamStart = () => {
-      streamRef.current = "";
-      setStreamDisplay("");
-      setStatusText("");
-    };
-    const onToken = ({ content }) => {
-      streamRef.current += content;
-      // Throttle stream display updates to ~30fps for smoother rendering
-      if (!streamThrottleRef.current) {
-        streamThrottleRef.current = setTimeout(() => {
-          setStreamDisplay(streamRef.current);
-          streamThrottleRef.current = null;
-        }, 33);
+class LoadingAnimation {
+  constructor(tui, modelName) {
+    this.tui = tui;
+    this.modelName = modelName;
+    this.frame = 0;
+    this.msgIdx = 0;
+    this.frameCount = 0;
+    this.intervalId = setInterval(() => {
+      this.frame++;
+      this.frameCount++;
+      if (this.frameCount % 10 === 0) {
+        this.msgIdx = (this.msgIdx + 1) % LOADING_MESSAGES.length;
       }
-    };
-    const onStreamEnd = () => {
-      // Clear any pending throttle and flush final content
-      if (streamThrottleRef.current) {
-        clearTimeout(streamThrottleRef.current);
-        streamThrottleRef.current = null;
-      }
-      setStreamDisplay(streamRef.current);
-    };
-
-    const onThinking = ({ content }) => {
-      setLog(addToLog({ role: "thinking", text: content }));
-    };
-
-    const onToolCall = ({ name, args }) => {
-      // Flush any streaming content to log before showing tool
-      if (streamRef.current) {
-        const text = streamRef.current;
-        streamRef.current = "";
-        setStreamDisplay("");
-        setLog(addToLog({ role: "agent", text }));
-      }
-      const summary = summarizeArgs(args);
-      setStatusText(`${name}(${summary})`);
-      setLog(addToLog({ role: "tool", text: `[tool] ${name}(${summary})` }));
-    };
-    const onToolResult = () => setStatusText("");
-
-    const onTokenUsage = (usage) => setTokenUsage(usage);
-
-    const onContextReady = () => {
-      contextReady.current = true;
-      if (minTimeElapsed.current) {
-        setIsLoading(false);
-        setLog(addToLog({ role: "tool", text: "(project context gathered)" }));
-      }
-    };
-
-    const onError = (error) => {
-      setLog(addToLog({ role: "error", text: error.message }));
-    };
-
-    const onRetry = ({ attempt, maxRetries, message }) => {
-      setLog(addToLog({ role: "tool", text: `(retry ${attempt}/${maxRetries}: ${message})` }));
-      setStatusText(`retrying (${attempt}/${maxRetries})...`);
-    };
-
-    const onSubAgentProgress = (event) => {
-      if (event.type === "start") {
-        setStatusText(`delegate: ${event.task?.substring(0, 60) || "researching"}...`);
-      } else if (event.type === "tool_call") {
-        setStatusText(`delegate → ${event.name}(${summarizeArgs(event.args).substring(0, 50)})`);
-      } else if (event.type === "iteration") {
-        setStatusText(`delegate: iteration ${event.current}/${event.max}`);
-      } else if (event.type === "done") {
-        setStatusText("");
-      }
-    };
-
-    agent.on("stream_start", onStreamStart);
-    agent.on("token", onToken);
-    agent.on("stream_end", onStreamEnd);
-    agent.on("thinking", onThinking);
-    agent.on("tool_call", onToolCall);
-    agent.on("tool_result", onToolResult);
-    agent.on("token_usage", onTokenUsage);
-    agent.on("context_ready", onContextReady);
-    agent.on("error", onError);
-    agent.on("retry", onRetry);
-    agent.on("sub_agent_progress", onSubAgentProgress);
-
-    return () => {
-      agent.off("stream_start", onStreamStart);
-      agent.off("token", onToken);
-      agent.off("stream_end", onStreamEnd);
-      agent.off("thinking", onThinking);
-      agent.off("tool_call", onToolCall);
-      agent.off("tool_result", onToolResult);
-      agent.off("token_usage", onTokenUsage);
-      agent.off("context_ready", onContextReady);
-      agent.off("error", onError);
-      agent.off("retry", onRetry);
-      agent.off("sub_agent_progress", onSubAgentProgress);
-      // Clean up any pending stream throttle timeout
-      if (streamThrottleRef.current) {
-        clearTimeout(streamThrottleRef.current);
-        streamThrottleRef.current = null;
-      }
-    };
-  }, [agent, addToLog]);
-
-  // Loading animation loop - cycles through colors
-  useEffect(() => {
-    if (!isLoading) return;
-    let msgIdx = 0, frameCount = 0;
-    const interval = setInterval(() => {
-      setLoadingFrame((f) => f + 1);
-      frameCount++;
-      if (frameCount % 10 === 0) {
-        setLoadingMessage(LOADING_MESSAGES[msgIdx]);
-        msgIdx = (msgIdx + 1) % LOADING_MESSAGES.length;
-      }
+      this.tui.requestRender();
     }, 100);
-    return () => clearInterval(interval);
-  }, [isLoading]);
-
-  // Eagerly init agent context
-  useEffect(() => {
-    agent._init().catch(() => {
-      contextReady.current = true;
-      if (minTimeElapsed.current) setIsLoading(false);
-    });
-  }, [agent]);
-
-  // Minimum 5-second loading screen
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      minTimeElapsed.current = true;
-      if (contextReady.current) {
-        setIsLoading(false);
-        setLog(addToLog({ role: "tool", text: "(project context gathered)" }));
-      }
-    }, 5000);
-    return () => clearTimeout(timer);
-  }, []);
-
-  // ── Submit handler ──
-  const submit = useCallback(
-    async (text) => {
-      if (!text.trim()) return;
-
-      const trimmed = text.trim();
-      if (trimmed === "exit" || trimmed === "quit" || trimmed === "/exit" || trimmed === "/quit") { exit(); return; }
-
-      if (text.trim() === "/reset") {
-        agent.reset();
-        setLog(addToLog({ role: "tool", text: "(conversation reset)" }));
-        return;
-      }
-      if (text.trim() === "/inspect") {
-        try {
-          const context = await agent.getContext();
-          const contextPath = join(agent.jailDirectory, "CONTEXT.md");
-          writeFileSync(contextPath, context, "utf-8");
-          setLog(addToLog({ role: "tool", text: `(context saved to ${contextPath})` }));
-        } catch (err) {
-          setLog(addToLog({ role: "error", text: `Failed to save context: ${err.message}` }));
-        }
-        return;
-      }
-
-      // /model [<name>] - change or show current model
-      if (text.trim().startsWith("/model")) {
-        const parts = text.trim().split(/\s+/);
-        if (parts.length === 1) {
-          // Just "/model" - show current model
-          setLog(addToLog({ role: "tool", text: `Current model: ${agent.model}` }));
-        } else if (parts[1] === "?" || parts[1] === "list") {
-          // List available models
-          try {
-            const models = await ollama.listModels(agent.client);
-            if (models.length === 0) {
-              setLog(addToLog({ role: "tool", text: "No models found. Pull a model with: ollama pull <model>" }));
-            } else {
-              const sortedModels = models.map(m => m.name).sort((a, b) => a.localeCompare(b));
-              const modelList = sortedModels.join("\n");
-              setLog(addToLog({ role: "tool", text: `Available models:\n${modelList}` }));
-            }
-          } catch (err) {
-            setLog(addToLog({ role: "error", text: `Failed to list models: ${err.message}` }));
-          }
-        } else {
-          // Switch to new model
-          const newModel = parts[1];
-          agent.setModel(newModel);
-          setLog(addToLog({ role: "tool", text: `Switched to model: ${newModel}` }));
-        }
-        return;
-      }
-
-      setLog(addToLog({ role: "user", text: text.trim() }));
-      setBusy(true);
-      setStatusText("thinking...");
-
-      try {
-        const answer = await agent.run(text.trim());
-        // Clear any residual streaming state
-        streamRef.current = "";
-        setStreamDisplay("");
-        setLog(addToLog({ role: "agent", text: answer }));
-      } catch (err) {
-        setLog(addToLog({ role: "error", text: err.message }));
-      }
-      setBusy(false);
-      setStatusText("");
-    },
-    [agent, exit, addToLog],
-  );
-
-  useEffect(() => {
-    if (initialPrompt) submit(initialPrompt);
-  }, []);
-
-  const handleSubmit = useCallback(
-    (value) => {
-      if (askState) {
-        const answer = value.trim();
-        setLog(addToLog({ role: "user", text: `(answer) ${answer}` }));
-        askState.resolve(answer);
-        setAskState(null);
-        setBusy(true);
-        setStatusText("thinking...");
-        setInput("");
-        return;
-      }
-      setInput("");
-      submit(value);
-    },
-    [askState, submit, addToLog],
-  );
-
-  // Key bindings — stable callback to avoid listener churn during streaming
-  const busyRef = useRef(false);
-  busyRef.current = busy;
-  const approvalRef = useRef(null);
-  approvalRef.current = approvalState;
-  const askRef = useRef(null);
-  askRef.current = askState;
-
-  const inputHandler = useCallback((ch, key) => {
-    // Handle Ctrl+C for exit/cancel
-    if (key.ctrl && ch === "c") {
-      const now = Date.now();
-      if (now - lastCtrlC.current < 500) { exit(); }
-      else {
-        // If an approval prompt is showing, reject it
-        if (approvalRef.current) {
-          const { name, resolve } = approvalRef.current;
-          setLog((prev) => [...prev, { role: "tool", text: `(denied ${name})` }]);
-          resolve({ approved: false });
-          setApprovalState(null);
-          lastCtrlC.current = now;
-          return;
-        }
-        if (busyRef.current) {
-          agent.cancel();
-          streamRef.current = "";
-          setStreamDisplay("");
-          setLog(addToLog({ role: "tool", text: "(operation cancelled — press Ctrl+C again to quit)" }));
-          setBusy(false);
-          setStatusText("");
-        } else {
-          setLog(addToLog({ role: "tool", text: "(press Ctrl+C again to quit)" }));
-        }
-        lastCtrlC.current = now;
-      }
-      return;
-    }
-
-    // Handle approval prompt — single keypress: y/n/a/Enter
-    if (approvalRef.current) {
-      const { name, resolve } = approvalRef.current;
-      if (ch === "y" || key.return) {
-        setLog(addToLog({ role: "tool", text: `(approved ${name})` }));
-        resolve({ approved: true });
-        setApprovalState(null);
-      } else if (ch === "n") {
-        setLog(addToLog({ role: "tool", text: `(denied ${name})` }));
-        resolve({ approved: false });
-        setApprovalState(null);
-      } else if (ch === "a") {
-        setLog(addToLog({ role: "tool", text: "(approved all future tool calls — saved to settings)" }));
-        resolve({ approved: true, approveAll: true });
-        setApprovalState(null);
-        // Persist the setting for future sessions
-        saveSetting(agent.jailDirectory, "autoApprove", true).catch(() => {});
-      }
-      return;
-    }
-
-    // Handle text input (works in normal, ask, and busy/nudge modes)
-    const handled = handleMultilineInput(ch, key);
-    if (handled) return;
-
-    // Enter submits or injects a nudge
-    if (key.return) {
-      if (busyRef.current && !askRef.current) {
-        // Agent is running — inject as a nudge
-        const text = input.trim();
-        if (text) {
-          agent.inject(text);
-          setLog(addToLog({ role: "nudge", text }));
-          setInput("");
-        }
-        return;
-      }
-      handleSubmit(input);
-      return;
-    }
-  }, [agent, exit, busy, input, handleMultilineInput, handleSubmit, addToLog]);
-
-  useInput(inputHandler);
-
-  const contentWidth = columns - 4;
-  const boxWidth = contentWidth + 2; // full border-to-border width (matches header)
-
-  // Header
-  const headerTitle = " ◉ smol-agent ";
-  const headerFill = Math.max(0, contentWidth - 1 - headerTitle.length);
-  const headerTop = "╭─" + headerTitle + "─".repeat(headerFill) + "╮";
-  const headerBot = "╰" + "─".repeat(contentWidth) + "╯";
-
-  // ═══ Loading screen ═══
-  if (isLoading) {
-    return e(Box, { flexDirection: "column", paddingX: 1, paddingY: 1 },
-      e(Text, { dimColor: true }, headerTop),
-      e(Box, { justifyContent: "center" },
-        e(Text, { dimColor: true }, "("),
-        e(Text, { color: "magenta" }, agent.model),
-        e(Text, { dimColor: true }, ")"),
-      ),
-      e(Text, { dimColor: true }, headerBot),
-      e(Box, { flexDirection: "column", alignItems: "center", marginTop: 2 },
-        ...LOADING_FRAMES[loadingFrame % LOADING_FRAMES.length].map((line, i) =>
-          e(Text, { key: i, color: "cyan", bold: true }, line),
-        ),
-      ),
-      e(Box, { justifyContent: "center", marginTop: 1 },
-        e(Text, { dimColor: true }, loadingMessage),
-      ),
-      e(Box, { justifyContent: "center", marginTop: 1 },
-        e(Text, { color: "yellow" }, e(Spinner, { type: "dots" })),
-        e(Text, { dimColor: true }, " Loading..."),
-      ),
-    );
   }
 
-  // ═══ Main UI ═══
-  return e(Box, { flexDirection: "column", paddingX: 1 },
+  stop() {
+    if (this.intervalId) {
+      clearInterval(this.intervalId);
+      this.intervalId = null;
+    }
+  }
 
-    // ── Header ──
-    e(Text, { dimColor: true }, headerTop),
-    e(Box, null,
-      e(Text, { dimColor: true }, "│  "),
-      e(Text, { color: "magenta" }, agent.model),
-      e(Box, { flexGrow: 1 }),
-      e(Text, { dimColor: true }, "  │"),
-    ),
-    e(Text, { dimColor: true }, headerBot),
+  invalidate() {}
 
-    !isRawModeSupported &&
-      e(Text, { color: "yellow", dimColor: true }, "  ⚠ Advanced key handling not available"),
-
-    // ── Message log ──
-    ...log.flatMap((entry) => {
-      const key = entry.id;
-      if (entry.role === "user") {
-        return [
-          e(Box, { key, marginTop: 1 },
-            e(Text, { color: "green", bold: true }, " > "),
-            e(Text, { bold: true }, entry.text || ""),
-          ),
-        ];
-      }
-      if (entry.role === "agent") {
-        const text = entry.text || "(empty response)";
-        const lines = text.split("\n");
-        const first = lines[0];
-        const rest = lines.slice(1).join("\n").trim();
-        const result = [
-          e(Box, { key, marginTop: 1 },
-            e(Text, null,
-              e(Text, { color: "cyan", bold: true }, " \u23FA  "),
-              ...processInlineFormatting(first),
-            ),
-          ),
-        ];
-        if (rest) {
-          result.push(
-            e(Box, { key: `${key}-md`, marginLeft: 4 }, e(Markdown, null, rest)),
-          );
-        }
-        return result;
-      }
-      if (entry.role === "thinking") {
-        const lines = (entry.text || "").split("\n");
-        return lines.map((line, i) =>
-          e(Text, { key: `${key}-think-${i}`, dimColor: true, color: "gray" },
-            i === 0 ? "    \u{1F9E0} " + line : "       " + line,
-          ),
-        );
-      }
-      if (entry.role === "nudge") {
-        return [
-          e(Box, { key, marginTop: 1 },
-            e(Text, { color: "yellow", bold: true }, " >> "),
-            e(Text, { color: "yellow" }, entry.text || ""),
-          ),
-        ];
-      }
-      if (entry.role === "tool") {
-        return [e(Text, { key, dimColor: true }, "    ⎿  " + (entry.text || ""))];
-      }
-      if (entry.role === "error") {
-        return [
-          e(Box, { key, marginTop: 1 },
-            e(Text, { color: "red" }, " ✗ " + (entry.text || "unknown error")),
-          ),
-        ];
-      }
-      return [];
-    }),
-
-    // ── Streaming content ──
-    streamDisplay &&
-      (() => {
-        const sLines = streamDisplay.split("\n");
-        const first = sLines[0];
-        const rest = sLines.length > 1 ? sLines.slice(1).join("\n") : null;
-        return e(Box, { marginTop: 1, flexDirection: "column" },
-          e(Text, null,
-            e(Text, { color: "cyan", bold: true }, " \u23FA  "),
-            first,
-            !rest ? e(Text, { color: "cyan" }, "\u258B") : null,
-          ),
-          rest && e(Box, { marginLeft: 4 },
-            e(Text, null, rest, e(Text, { color: "cyan" }, "\u258B")),
-          ),
-        );
-      })(),
-
-    // ── Spinner ──
-    busy && !streamDisplay &&
-      e(Box, { marginTop: 1, marginLeft: 1 },
-        e(Text, { color: "cyan" }, e(Spinner, { type: "dots" })),
-        e(Text, { dimColor: true }, ` ${statusText}`),
-      ),
-
-    // ── Ask user (shown above input when active) ──
-    askState &&
-      e(Box, { marginTop: 0 },
-        e(Text, { bold: true, color: "magenta" }, " ?  "),
-        e(Text, { bold: true }, askState.question),
-      ),
-
-    // ── Input (ask_user shows here if question pending) ──
-    e(Box, { marginTop: 0 },
-      e(MultilineInput, {
-        value: input,
-        cursorOffset: cursorOffset,
-        focus: !approvalState,
-        width: boxWidth,
-        pasteLineCount: pasteLineCount,
-      }),
-    ),
-
-    // ── Status line (compact) ──
-    e(Box, { marginTop: 0, flexDirection: "row", alignItems: "center" },
-      e(Text, { dimColor: true }, "  "),
-      statusText && e(Text, { dimColor: true }, statusText),
-    ),
-
-    // ── Context bar (always visible at bottom) ──
-    e(Box, { marginTop: 0 },
-      e(Text, { dimColor: true }, "  "),
-      tokenUsage && e(ContextUsageBar, { usage: tokenUsage }),
-      e(Box, { flexGrow: 1 }),
-      e(Text, { dimColor: true }, "ctrl+j newline · type while busy to nudge · /model · /reset · /exit "),
-    ),
-  );
+  render(width) {
+    const frameLines = LOADING_FRAMES[this.frame % LOADING_FRAMES.length];
+    const headerText = chalk.dim(" ◉ smol-agent ") + chalk.magenta(`(${this.modelName})`);
+    const msgText = chalk.dim(LOADING_MESSAGES[this.msgIdx]);
+    return [
+      truncateToWidth(headerText, width),
+      "",
+      ...frameLines.map((line) => truncateToWidth(chalk.cyan.bold(line), width)),
+      "",
+      truncateToWidth(msgText, width),
+    ];
+  }
 }
+
+// ═══ Themes ═══
+
+const markdownTheme = {
+  heading: (t) => chalk.blue.bold(t),
+  link: (t) => chalk.blue.underline(t),
+  linkUrl: (t) => chalk.dim(t),
+  code: (t) => chalk.magenta(t),
+  codeBlock: (t) => chalk.green(t),
+  codeBlockBorder: (t) => chalk.dim(t),
+  quote: (t) => chalk.italic(chalk.dim(t)),
+  quoteBorder: (t) => chalk.magenta(t),
+  hr: (t) => chalk.dim(t),
+  listBullet: (t) => chalk.magenta(t),
+  bold: (t) => chalk.bold(t),
+  italic: (t) => chalk.italic(t),
+  strikethrough: (t) => chalk.strikethrough(t),
+  underline: (t) => chalk.underline(t),
+};
+
+const editorTheme = {
+  borderColor: (t) => chalk.dim(t),
+  selectList: {
+    selectedPrefix: (t) => chalk.green.bold(t),
+    selectedText: (t) => chalk.bold(t),
+    description: (t) => chalk.dim(t),
+    scrollInfo: (t) => chalk.dim(t),
+    noMatch: (t) => chalk.dim(t),
+  },
+};
+
+// ═══ FooterBar component ═══
+
+class FooterBar {
+  constructor(getState) {
+    this.getState = getState;
+  }
+
+  invalidate() {}
+
+  render(width) {
+    const { modelName, tokenUsage, gitStats } = this.getState();
+    return [buildContextBar(modelName, tokenUsage, gitStats, width)];
+  }
+}
+
+// ═══ StatusArea component ═══
+
+class StatusArea {
+  constructor(getState, tui) {
+    this.getState = getState;
+    this.loaderFrames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+    this.loaderFrame = 0;
+    this.intervalId = setInterval(() => {
+      this.loaderFrame = (this.loaderFrame + 1) % this.loaderFrames.length;
+      tui.requestRender();
+    }, 80);
+  }
+
+  stopAnimation() {
+    if (this.intervalId) {
+      clearInterval(this.intervalId);
+      this.intervalId = null;
+    }
+  }
+
+  invalidate() {}
+
+  render(width) {
+    const state = this.getState();
+    const lines = [];
+
+    if (state.streamContent) {
+      const sLines = state.streamContent.split("\n");
+      lines.push("");
+      const cursor = chalk.cyan("▌");
+      
+      // Check if the first line contains markdown formatting (e.g., **bold**, *italic*)
+      const hasMarkdown = sLines[0].match(/\*\*.*?\*/s) !== null || sLines[0].match(/\*\.?.*?\*/s) !== null || sLines[0].match(/\*\[.*?\]\*/s) !== null;
+      
+      if (hasMarkdown) {
+        // Render the first line as markdown
+        lines.push(new Markdown(sLines[0], 1, 0, markdownTheme));
+      } else {
+        // Render as plain text
+        const firstLine = chalk.cyan.bold(" ▸  ") + sLines[0] + (sLines.length === 1 ? cursor : "");
+        lines.push(truncateToWidth(firstLine, width));
+      }
+      
+      if (sLines.length > 1) {
+        const lastLine = sLines[sLines.length - 1];
+        lines.push(truncateToWidth("     " + lastLine + cursor, width));
+      }
+    } else if (state.busy) {
+      const frame = this.loaderFrames[this.loaderFrame];
+      lines.push("");
+      const spinnerLine = " " + chalk.cyan(frame) + chalk.dim(` ${state.statusText || "thinking..."}`);
+      lines.push(truncateToWidth(spinnerLine, width));
+    }
+
+    if (state.askState) {
+      lines.push(truncateToWidth(
+        chalk.magenta.bold(" ?  ") + chalk.bold(state.askState.question),
+        width,
+      ));
+    }
+
+    if (state.approvalState) {
+      const { name, args } = state.approvalState;
+      const summary = summarizeArgs(args);
+      const shortSummary = summary.length > 60 ? summary.slice(0, 57) + "..." : summary;
+      const approvalLine = chalk.yellow.bold(" ⚠  ") +
+        chalk.bold(`Approve ${name}(${shortSummary})`) +
+        chalk.dim(" [y/n/a]");
+      lines.push(truncateToWidth(approvalLine, width));
+    }
+
+    return lines;
+  }
+}
+
+// ═══ ChatView ═══
+// Layout component that owns output, status, editor, and footer.
+// Implements Focusable so TUI delegates input to it.
+// Output grows naturally — pi-tui's viewport tracking keeps the bottom visible.
+
+class ChatView {
+  constructor(tui, editor, statusArea, footerBar) {
+    this.tui = tui;
+    this.output = new Container();
+    this.editor = editor;
+    this.statusArea = statusArea;
+    this.footerBar = footerBar;
+    this._focused = false;
+  }
+
+  get focused() { return this._focused; }
+  set focused(v) {
+    this._focused = v;
+    this.editor.focused = v;
+  }
+
+  handleInput(data) {
+    this.editor.handleInput(data);
+  }
+
+  invalidate() {
+    this.output.invalidate?.();
+    this.editor.invalidate?.();
+    this.statusArea.invalidate?.();
+    this.footerBar.invalidate?.();
+  }
+
+  render(width) {
+    const outputLines = this.output.render(width);
+    const statusLines = this.statusArea.render(width);
+    const editorLines = this.editor.render(width);
+    const footerLines = this.footerBar.render(width);
+
+    // Place ❯ prompt on first content line of editor (after top border)
+    if (editorLines.length > 1) {
+      editorLines[1] = truncateToWidth(chalk.green.bold("❯ ") + editorLines[1].slice(1), width);
+    }
+
+    return [...outputLines, ...statusLines, ...editorLines, ...footerLines];
+  }
+
+  addLog(text) {
+    this.output.addChild(new Text(text, 0, 0));
+    this.tui.requestRender();
+  }
+
+  addLogMarkdown(prefixLine, rest) {
+    this.output.addChild(new Spacer(1));
+    this.output.addChild(new Text(prefixLine, 0, 0));
+    if (rest && rest.trim()) {
+      this.output.addChild(new Markdown(rest, 1, 0, markdownTheme));
+    }
+    this.tui.requestRender();
+  }
+}
+
+// ═══ Helpers ═══
 
 function summarizeArgs(args) {
   if (!args) return "";
@@ -711,4 +342,555 @@ function summarizeArgs(args) {
     parts.push(`${k}: ${s.length > 50 ? s.slice(0, 47) + "..." : s}`);
   }
   return parts.join(", ");
+}
+
+/**
+ * Get git diff stats (lines added/removed) for the working directory.
+ * Returns { branch, added, removed } or null if not in a git repo.
+ */
+function getGitStats(cwd) {
+  try {
+    const branch = execSync("git rev-parse --abbrev-ref HEAD", {
+      cwd, encoding: "utf-8", timeout: 5000,
+      stdio: ["pipe", "pipe", "pipe"],
+    }).trim();
+
+    // Get diff stats --numstat shows added\tremoved\tfilename
+    const diffStats = execSync("git diff --numstat", {
+      cwd, encoding: "utf-8", timeout: 5000,
+      stdio: ["pipe", "pipe", "pipe"],
+    }).trim();
+
+    let added = 0;
+    let removed = 0;
+    if (diffStats) {
+      for (const line of diffStats.split("\n")) {
+        const [add, rem] = line.split("\t");
+        // Binary files show "-" for add/rem
+        if (add !== "-" && rem !== "-") {
+          added += parseInt(add, 10) || 0;
+          removed += parseInt(rem, 10) || 0;
+        }
+      }
+    }
+
+    return { branch, added, removed };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Build the left part of the context bar (model + token usage).
+ */
+function buildContextBarLeft(modelName, tokenUsage) {
+  const modelPart = chalk.magenta(modelName || "");
+  if (!tokenUsage) return " " + modelPart + chalk.dim(" |");
+  const { percentage, used, max } = tokenUsage;
+  const barWidth = 10;
+  const filled = Math.round((percentage / 100) * barWidth);
+  const bar = "█".repeat(filled) + "░".repeat(barWidth - filled);
+  let colorFn;
+  if (percentage > 90) colorFn = chalk.red.bold;
+  else if (percentage > 75) colorFn = chalk.yellow;
+  else if (percentage > 50) colorFn = chalk.cyan;
+  else colorFn = chalk.green;
+  const formatTokens = (n) => (n >= 1000 ? `${Math.round(n / 1000)}K` : String(n));
+  return " " + modelPart + chalk.dim(" | ") + colorFn(`[${bar}] ${percentage}%`) + chalk.dim(` ${formatTokens(used)}/${formatTokens(max)} |`);
+}
+
+/**
+ * Build the right part of the context bar (git stats).
+ */
+function buildContextBarRight(gitStats) {
+  if (!gitStats) return "";
+  const branchPart = chalk.cyan(gitStats.branch);
+  if (gitStats.added > 0 || gitStats.removed > 0) {
+    const addPart = chalk.green(`+${gitStats.added}`);
+    const remPart = chalk.red(`-${gitStats.removed}`);
+    return chalk.dim("[") + branchPart + chalk.dim("] ") + addPart + " " + remPart + " ";
+  }
+  return chalk.dim("[") + branchPart + chalk.dim("] ");
+}
+
+/**
+ * Build the full context bar with right-justified git stats.
+ */
+function buildContextBar(modelName, tokenUsage, gitStats, width) {
+  const leftPart = buildContextBarLeft(modelName, tokenUsage);
+  const rightPart = buildContextBarRight(gitStats);
+
+  if (!rightPart) return leftPart;
+
+  // Calculate padding needed to right-justify git stats
+  // Use visibleWidth to handle ANSI escape codes correctly
+  const leftLength = visibleWidth(leftPart);
+  const rightLength = visibleWidth(rightPart);
+  const padding = Math.max(1, width - leftLength - rightLength);
+
+  return leftPart + " ".repeat(padding) + rightPart;
+}
+
+// ═══ Main entry point ═══
+
+export function startApp(agent, initialPrompt) {
+  const terminal = new ProcessTerminal();
+  const tui = new TUI(terminal);
+
+  // ── State ──
+  let busy = false;
+  let askState = null;
+  let approvalState = null;
+  let lastCtrlC = 0;
+  let tokenUsage = null;
+  let streamContent = "";
+  let statusText = "";
+  let streamThrottle = null;
+  let contextReady = false;
+  let minTimeElapsed = false;
+  let isLoading = true;
+  let gitStats = null;
+
+  // ── Loading screen ──
+  const loadingAnim = new LoadingAnimation(tui, agent.model);
+  tui.addChild(loadingAnim);
+
+  // ── Main UI components ──
+  const statusArea = new StatusArea(() => ({
+    busy,
+    streamContent,
+    statusText,
+    askState,
+    approvalState,
+  }), tui);
+
+  const footerBar = new FooterBar(() => ({
+    modelName: agent.model,
+    tokenUsage,
+    gitStats,
+  }));
+
+  const editor = new Editor(tui, editorTheme);
+  editor.setPaddingX(1);
+
+  // Set up autocomplete
+  const slashCommands = [
+    { name: "model", description: "Switch or list models (/model <name> or /model list)" },
+    { name: "clear", description: "Clear conversation history" },
+    { name: "inspect", description: "Dump context to file" },
+
+    { name: "exit", description: "Exit the agent" },
+  ];
+  const autocompleteProvider = new CombinedAutocompleteProvider(slashCommands, agent.jailDirectory || process.cwd());
+  editor.setAutocompleteProvider(autocompleteProvider);
+
+  // ── ChatView ──
+  const chatView = new ChatView(tui, editor, statusArea, footerBar);
+
+  function updateContextBar() {
+    // Refresh git stats when updating context bar
+    try {
+      gitStats = getGitStats(agent.jailDirectory || process.cwd());
+    } catch {
+      gitStats = null;
+    }
+    footerBar.invalidate();
+    tui.requestRender();
+  }
+
+  // Load git stats on startup
+  updateContextBar();
+
+  // ── Transition from loading to main UI ──
+  function switchToMainUI() {
+    if (!isLoading) return;
+    isLoading = false;
+    loadingAnim.stop();
+    tui.removeChild(loadingAnim);
+
+    tui.addChild(chatView);
+    tui.setFocus(chatView);
+    tui.requestRender();
+
+    if (initialPrompt) {
+      submit(initialPrompt);
+    }
+  }
+
+  // ── Submit handler ──
+  async function submit(text) {
+    if (!text.trim()) return;
+    const trimmed = text.trim();
+
+    if (trimmed === "exit" || trimmed === "quit" || trimmed === "/exit" || trimmed === "/quit") {
+      cleanup();
+      process.exit(0);
+    }
+
+    if (trimmed === "/clear") {
+      agent.reset();
+      chatView.addLog(chalk.dim("    ⎿  (conversation cleared)"));
+      return;
+    }
+
+    if (trimmed === "/reflect") {
+      // Read recent logs and analyze for skill development opportunities
+      const logs = readRecentLogs(1000);
+      if (!logs) {
+        chatView.addLog(chalk.red(" ✗ No logs available for reflection"));
+        return;
+      }
+
+      const reflectPrompt = `Analyze the following agent session logs to identify patterns, repetitive tasks, or areas where the agent could benefit from a new skill. A skill is a reusable procedure that helps the agent work more effectively.
+
+## What to look for:
+1. **Repetitive patterns** - Similar tool call sequences that could be automated
+2. **Common mistakes** - Errors that could be avoided with a checklist or procedure
+3. **Missing knowledge** - Domain-specific patterns the agent repeatedly discovers
+4. **Workflow improvements** - Multi-step processes that could be documented
+
+## Instructions:
+- If you find a good skill opportunity, write it as a markdown file to .smol-agent/skills/<name>.md
+- Use YAML frontmatter with: name, description, triggers (when to use)
+- The skill content should be practical guidance the agent can follow
+- After writing the skill, confirm it was created and explain why it will help
+
+## Agent Logs:
+\`\`\`
+${logs}
+\`\`\`
+
+Reflect on these logs and determine if there's a skill worth creating. If the logs don't show clear patterns for improvement, explain what you observed.`;
+
+      chatView.addLog(chalk.dim("    ⎿  (reflecting on agent logs for skill opportunities...)"));
+      chatView.addLog("");
+      busy = true;
+      statusText = "reflecting...";
+      updateStatus();
+
+      try {
+        const response = await agent.run(reflectPrompt);
+        // Refresh context to pick up any newly created skills
+        await agent.refreshContext();
+        chatView.addLog(chalk.dim("    ⎿  (skills context refreshed)"));
+      } catch (err) {
+        chatView.addLog(chalk.red(` ✗ Reflection failed: ${err.message}`));
+      } finally {
+        busy = false;
+        statusText = "";
+        updateStatus();
+      }
+      return;
+    }
+
+    if (trimmed === "/inspect") {
+      try {
+        const context = await agent.getContext();
+        const contextPath = join(agent.jailDirectory, "CONTEXT.md");
+        writeFileSync(contextPath, context, "utf-8");
+        chatView.addLog(chalk.dim(`    ⎿  (context saved to ${contextPath})`));
+      } catch (err) {
+        chatView.addLog(chalk.red(` ✗ Failed to save context: ${err.message}`));
+      }
+      return;
+    }
+
+    if (trimmed.startsWith("/model")) {
+      const parts = trimmed.split(/\s+/);
+      if (parts.length === 1) {
+        chatView.addLog(chalk.dim(`    ⎿  Current model: ${agent.model}`));
+      } else if (parts[1] === "?" || parts[1] === "list") {
+        try {
+          const models = await listModels(agent.client);
+          if (models.length === 0) {
+            chatView.addLog(chalk.dim("    ⎿  No models found. Pull a model with: ollama pull <model>"));
+          } else {
+            const sorted = models.map((m) => m.name).sort((a, b) => a.localeCompare(b));
+            chatView.addLog(chalk.dim("    ⎿  Available models:\n" + sorted.map((n) => `        ${n}`).join("\n")));
+          }
+        } catch (err) {
+          chatView.addLog(chalk.red(` ✗ Failed to list models: ${err.message}`));
+        }
+      } else {
+        const newModel = parts[1];
+        agent.setModel(newModel);
+        chatView.addLog(chalk.dim(`    ⎿  Switched to model: ${newModel}`));
+        updateContextBar();
+      }
+      return;
+    }
+
+    chatView.addLog("");
+    chatView.addLog(chalk.green.bold(" > ") + chalk.bold(trimmed));
+    busy = true;
+    statusText = "thinking...";
+    tui.requestRender();
+
+    try {
+      await agent.run(trimmed);
+      // Flush remaining streamed content (only text from the last iteration,
+      // since stream_start resets streamContent each iteration).
+      // This avoids duplication when the model repeats earlier text.
+      const finalStream = streamContent.replace(/<thinking>[\s\S]*?<\/thinking>/g, "").trim();
+      streamContent = "";
+      if (streamThrottle) { clearTimeout(streamThrottle); streamThrottle = null; }
+      if (finalStream) {
+        const lines = finalStream.split("\n");
+        const first = lines[0];
+        const rest = lines.slice(1).join("\n").trim();
+        chatView.addLogMarkdown(chalk.cyan.bold(" ▸  ") + first, rest);
+      }
+    } catch (err) {
+      streamContent = "";
+      if (streamThrottle) { clearTimeout(streamThrottle); streamThrottle = null; }
+      chatView.addLog(chalk.red(` ✗ ${err.message}`));
+    }
+
+    busy = false;
+    statusText = "";
+    tui.requestRender();
+  }
+
+  // ── Editor submit ──
+  editor.onSubmit = (text) => {
+    // Add to history for up/down arrow navigation
+    editor.addToHistory(text);
+    editor.setText("");
+
+    if (askState) {
+      const answer = text.trim();
+      chatView.addLog(chalk.dim("    ⎿  ") + chalk.bold(`(answer) ${answer}`));
+      askState.resolve(answer);
+      askState = null;
+      busy = true;
+      statusText = "thinking...";
+      tui.requestRender();
+      return;
+    }
+
+    if (busy) {
+      const nudge = text.trim();
+      if (nudge) {
+        agent.inject(nudge);
+        chatView.addLog("");
+        chatView.addLog(chalk.yellow.bold(" >> ") + chalk.yellow(nudge));
+      }
+      return;
+    }
+
+    submit(text.trim());
+  };
+
+  // ── Agent events ──
+  const onStreamStart = () => {
+    streamContent = "";
+    statusText = "";
+    tui.requestRender();
+  };
+
+  const onToken = ({ content }) => {
+    streamContent += content;
+    if (!streamThrottle) {
+      streamThrottle = setTimeout(() => {
+        streamThrottle = null;
+        tui.requestRender();
+      }, 33);
+    }
+  };
+
+  const onStreamEnd = () => {
+    if (streamThrottle) { clearTimeout(streamThrottle); streamThrottle = null; }
+    tui.requestRender();
+  };
+
+  const onThinking = ({ content }) => {
+    const lines = (content || "").split("\n");
+    const formatted = lines.map((l, i) =>
+      chalk.dim(i === 0 ? `    🧠 ${l}` : `       ${l}`),
+    ).join("\n");
+    chatView.addLog(formatted);
+  };
+
+  const onToolCall = ({ name, args }) => {
+    if (streamContent) {
+      const text = streamContent.replace(/<thinking>[\s\S]*?<\/thinking>/g, "").trim();
+      streamContent = "";
+      if (streamThrottle) { clearTimeout(streamThrottle); streamThrottle = null; }
+      if (text) {
+        const lines = text.split("\n");
+        const first = lines[0];
+        const rest = lines.slice(1).join("\n").trim();
+        chatView.addLogMarkdown(chalk.cyan.bold(" ▸  ") + first, rest);
+      }
+    }
+    const summary = summarizeArgs(args);
+    chatView.addLog(chalk.dim(`    ⎿  [tool] ${name}(${summary})`));
+    tui.requestRender();
+  };
+
+  const onToolResult = () => {
+    tui.requestRender();
+  };
+
+  const onTokenUsage = (usage) => {
+    tokenUsage = usage;
+    updateContextBar();
+  };
+
+  const onContextReady = () => {
+    contextReady = true;
+    if (minTimeElapsed) {
+      chatView.addLog(chalk.dim("    ⎿  (project context gathered)"));
+      switchToMainUI();
+    }
+  };
+
+  const onError = (error) => {
+    chatView.addLog(chalk.red(` ✗ ${error.message}`));
+    tui.requestRender();
+  };
+
+  const onRetry = ({ attempt, maxRetries, message: msg }) => {
+    chatView.addLog(chalk.dim(`    ⎿  (retry ${attempt}/${maxRetries}: ${msg})`));
+    statusText = `retrying (${attempt}/${maxRetries})...`;
+    tui.requestRender();
+  };
+
+  const onSubAgentProgress = (event) => {
+    if (event.type === "start") {
+      statusText = `delegate: ${(event.task || "researching").substring(0, 60)}...`;
+    } else if (event.type === "tool_call") {
+      statusText = `delegate → ${event.name}(${summarizeArgs(event.args).substring(0, 50)})`;
+    } else if (event.type === "iteration") {
+      statusText = `delegate: iteration ${event.current}/${event.max}`;
+    } else if (event.type === "done") {
+      statusText = "";
+    }
+    tui.requestRender();
+  };
+
+  agent.on("stream_start", onStreamStart);
+  agent.on("token", onToken);
+  agent.on("stream_end", onStreamEnd);
+  agent.on("thinking", onThinking);
+  agent.on("tool_call", onToolCall);
+  agent.on("tool_result", onToolResult);
+  agent.on("token_usage", onTokenUsage);
+  agent.on("context_ready", onContextReady);
+  agent.on("error", onError);
+  agent.on("retry", onRetry);
+  agent.on("sub_agent_progress", onSubAgentProgress);
+
+  // ── ask_user handler ──
+  setAskHandler((question) =>
+    new Promise((resolve) => {
+      askState = { question, resolve };
+      busy = false;
+      tui.requestRender();
+    }),
+  );
+
+  // ── Tool approval handler ──
+  agent.setApprovalHandler((name, args) =>
+    new Promise((resolve) => {
+      approvalState = { name, args, resolve };
+      busy = false;
+      statusText = "";
+      tui.requestRender();
+    }),
+  );
+
+  // ── Global key handler ──
+  tui.addInputListener((data) => {
+    // Ctrl+C: cancel/exit
+    if (matchesKey(data, "ctrl+c")) {
+      const now = Date.now();
+      if (now - lastCtrlC < 500) {
+        cleanup();
+        process.exit(0);
+      } else {
+        if (approvalState) {
+          const { name, resolve } = approvalState;
+          chatView.addLog(chalk.dim(`    ⎿  (denied ${name})`));
+          resolve({ approved: false });
+          approvalState = null;
+          lastCtrlC = now;
+          return { consume: true };
+        }
+        if (busy) {
+          agent.cancel();
+          streamContent = "";
+          if (streamThrottle) { clearTimeout(streamThrottle); streamThrottle = null; }
+          chatView.addLog(chalk.dim("    ⎿  (operation cancelled — press Ctrl+C again to quit)"));
+          busy = false;
+          statusText = "";
+        } else {
+          chatView.addLog(chalk.dim("    ⎿  (press Ctrl+C again to quit)"));
+        }
+        tui.requestRender();
+        lastCtrlC = now;
+      }
+      return { consume: true };
+    }
+
+    // Approval state: y/n/a
+    if (approvalState) {
+      const { name, resolve } = approvalState;
+      if (data === "y" || matchesKey(data, "enter")) {
+        chatView.addLog(chalk.dim(`    ⎿  (approved ${name})`));
+        resolve({ approved: true });
+        approvalState = null;
+      } else if (data === "n") {
+        chatView.addLog(chalk.dim(`    ⎿  (denied ${name})`));
+        resolve({ approved: false });
+        approvalState = null;
+      } else if (data === "a") {
+        chatView.addLog(chalk.dim("    ⎿  (approved all future tool calls — saved to settings)"));
+        resolve({ approved: true, approveAll: true });
+        approvalState = null;
+        saveSetting(agent.jailDirectory, "autoApprove", true).catch(() => {});
+      }
+      if (!approvalState) {
+        busy = true;
+        statusText = "thinking...";
+      }
+      tui.requestRender();
+      return { consume: true };
+    }
+  });
+
+  // ── Cleanup ──
+  function cleanup() {
+    statusArea.stopAnimation();
+    loadingAnim.stop();
+    if (streamThrottle) { clearTimeout(streamThrottle); streamThrottle = null; }
+    agent.off("stream_start", onStreamStart);
+    agent.off("token", onToken);
+    agent.off("stream_end", onStreamEnd);
+    agent.off("thinking", onThinking);
+    agent.off("tool_call", onToolCall);
+    agent.off("tool_result", onToolResult);
+    agent.off("token_usage", onTokenUsage);
+    agent.off("context_ready", onContextReady);
+    agent.off("error", onError);
+    agent.off("retry", onRetry);
+    agent.off("sub_agent_progress", onSubAgentProgress);
+    tui.stop();
+  }
+
+  // ── Init ──
+  agent._init().catch(() => {
+    contextReady = true;
+    if (minTimeElapsed) switchToMainUI();
+  });
+
+  setTimeout(() => {
+    minTimeElapsed = true;
+    if (contextReady) {
+      chatView.addLog(chalk.dim("    ⎿  (project context gathered)"));
+      switchToMainUI();
+    }
+  }, 5000);
+
+  tui.start();
 }

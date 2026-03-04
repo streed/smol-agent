@@ -127,10 +127,35 @@ export function isTransientError(err) {
   return classifyError(err) === 'transient';
 }
 
+/**
+ * Read recent log entries from the log file.
+ * @param {number} maxLines - Maximum number of lines to read (from end of file)
+ * @returns {string} Log content or empty string if file doesn't exist
+ */
+export function readRecentLogs(maxLines = 500) {
+  try {
+    const content = fs.readFileSync(logFilePath, 'utf-8');
+    const lines = content.split('\n').filter(l => l.trim());
+    return lines.slice(-maxLines).join('\n');
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Get the log file path.
+ * @returns {string} Path to the log file
+ */
+export function getLogFilePath() {
+  return logFilePath;
+}
+
 export default {
   createLogger,
   logger,
   formatError,
   isTransientError,
   LEVELS,
+  readRecentLogs,
+  getLogFilePath,
 };

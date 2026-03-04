@@ -56,7 +56,7 @@ The agent is an EventEmitter that drives a loop: send messages to Ollama, check 
 
 | File | Lines | Purpose |
 |------|-------|---------|
-| `App.js` | 204 | Ink (React) terminal UI. Manages message log, input field, spinner, ask_user flow. Uses `React.createElement` directly (no JSX). Subscribes to agent events. Handles `/reset`, `exit`/`quit`, `Ctrl-C`. Renders agent responses with rich markdown formatting. |
+| `App.js` | 204 | Ink (React) terminal UI. Manages message log, input field, spinner, ask_user flow. Uses `React.createElement` directly (no JSX). Subscribes to agent events. Handles `/clear`, `exit`/`quit`, `Ctrl-C`. Renders agent responses with rich markdown formatting. |
 | `markdown.js` | 233 | Enhanced markdown renderer for terminal output. Converts markdown-style text to styled Text components with comprehensive support for headers, bold/italic text, inline code, code blocks, lists (ordered and unordered), blockquotes, links, and strikethrough formatting. |
 
 ### Tools (src/tools/)

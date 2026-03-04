@@ -1,9 +1,7 @@
 #!/usr/bin/env node
 
-import React from "react";
-import { render } from "ink";
 import { Agent } from "./agent.js";
-import App from "./ui/App.js";
+import { startApp } from "./ui/App.js";
 import path from "node:path";
 import fs from "node:fs";
 import { loadSettings } from "./settings.js";
@@ -65,10 +63,8 @@ Options:
       --help                Show this help message
 
 Interactive Commands:
-  /readonly or /ro   Toggle read-only mode (disables write tools)
-  /reset             Clear conversation history
+  /clear             Clear conversation history
   /inspect           Dump current context to CONTEXT.md
-  shift+tab          Toggle read-only mode
   Ctrl+C             Cancel current operation (double-tap to exit)
   exit / quit        Exit the agent
 
@@ -116,26 +112,5 @@ if (acpMode) {
     agent._approveAll = true;
   }
 
-  const isRawModeSupported = process.stdin.isTTY && typeof process.stdin.setRawMode === "function";
-
-  let renderOptions = {};
-  if (!isRawModeSupported) {
-    const mockStdin = {
-      isTTY: true,
-      setRawMode: () => {},
-      setEncoding: () => {},
-      ref: () => {},
-      unref: () => {},
-      on: (event, cb) => { if (event === "data") process.stdin.on(event, cb); },
-      removeListener: (event, cb) => { if (event === "data") process.stdin.removeListener(event, cb); },
-      resume: () => {},
-      pause: () => {},
-      addListener: () => {},
-    };
-    renderOptions = { stdin: mockStdin, exitOnCtrlC: false };
-  } else {
-    renderOptions = { exitOnCtrlC: false };
-  }
-
-  render(React.createElement(App, { agent, initialPrompt: promptText }), renderOptions);
+  startApp(agent, promptText);
 }

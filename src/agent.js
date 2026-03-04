@@ -846,6 +846,62 @@ export class Agent extends EventEmitter {
     return await gatherContext(this.jailDirectory, this.contextSize);
   }
 
+  /**
+   * Refresh the system context (skills, plans, etc.) without resetting conversation.
+   * Updates the system message with fresh context while preserving message history.
+   */
+  async refreshContext() {
+    // Find and update the system message in place
+    const systemIndex = this.messages.findIndex(m => m.role === "system");
+    if (systemIndex === -1) return;
+
+    // Re-gather context
+    let contextBlock = "";
+    try {
+      contextBlock = await gatherContext(this.jailDirectory, this.contextSize);
+    } catch { /* proceed without context */ }
+
+    // Rebuild tool schema block
+    const allTools = registry.ollamaTools(this.coreToolsOnly);
+    const toolLines = allTools.map(t => {
+      const fn = t.function;
+      const params = fn.parameters?.properties || {};
+      const paramList = Object.entries(params)
+        .map(([k, v]) => `${k}: ${v.type || 'string'}`)
+        .join(', ');
+      const desc = (fn.description || '').split('.')[0];
+      return `- **${fn.name}**(${paramList}): ${desc}.`;
+    });
+    const toolSchemaBlock = `\n\n## Available tools\n${toolLines.join('\n')}`;
+
+    // List extended tools
+    const extended = registry.extendedToolNames();
+    const extendedNote = extended.length > 0
+      ? `\n\nAdditional tools available if needed: ${extended.join(", ")}`
+      : "";
+
+    // Load active plan
+    let planBlock = "";
+    try {
+      const plan = await getCurrentPlan();
+      if (plan && (plan.details?.status === "in-progress" || plan.details?.status === "pending")) {
+        const step = plan.details?.currentStep || 0;
+        const desc = plan.details?.description || plan.filename;
+        const lastStep = plan.details?.lastCompletedDescription || "none";
+        planBlock = `\n\n## Active plan\n- Plan: ${desc}\n- Current step: ${step}\n- Last completed: ${lastStep}\n- Use complete_plan_step after finishing each step.`;
+      }
+    } catch { /* no plan */ }
+
+    const systemContent = contextBlock
+      + toolSchemaBlock
+      + extendedNote
+      + planBlock
+      + SYSTEM_PROMPT;
+
+    this.messages[systemIndex].content = systemContent;
+    logger.info("Context refreshed (skills, plans, tools updated)");
+  }
+
   /** Get conversation messages. */
   getMessages() {
     return this.messages;
