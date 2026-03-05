@@ -139,6 +139,20 @@ jobs:
           SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
           echo "short_sha=$SHORT_SHA" >> $GITHUB_OUTPUT
 
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
@@ -146,6 +160,132 @@ jobs:
 
       - name: Install jq
         run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Collect benchmark results into JSON
+        id: collect
+        run: |
+          MODELS_JSON='[]'
+          OVERALL="success"
+
+          for dir in results/test-output-*; do
+            model=$(basename "$dir" | sed 's/test-output-//')
+
+            if [ ! -f "$dir/test-results.json" ] || ! jq empty "$dir/test-results.json" 2>/dev/null; then
+              MODELS_JSON=$(echo "$MODELS_JSON" | jq \
+                --arg name "$model" \
+                '. += [{"name": $name, "status": "error", "passed": 0, "total": 0, "score": 0}]')
+              OVERALL="failure"
+              continue
+            fi
+
+            total=$(jq -r '.aggregate.total' "$dir/test-results.json")
+            passed=$(jq -r '.aggregate.passed' "$dir/test-results.json")
+            score=$(jq -r '.aggregate.normalized' "$dir/test-results.json")
+
+            if [ -z "$total" ] || [ "$total" = "null" ]; then
+              MODELS_JSON=$(echo "$MODELS_JSON" | jq \
+                --arg name "$model" \
+                '. += [{"name": $name, "status": "error", "passed": 0, "total": 0, "score": 0}]')
+              OVERALL="failure"
+              continue
+            fi
+
+            if [ "$passed" = "$total" ]; then
+              status="pass"
+            else
+              status="fail"
+              OVERALL="failure"
+            fi
+
+            MODELS_JSON=$(echo "$MODELS_JSON" | jq \
+              --arg name "$model" \
+              --arg status "$status" \
+              --argjson passed "$passed" \
+              --argjson total "$total" \
+              --argjson score "$score" \
+              '. += [{"name": $name, "status": $status, "passed": $passed, "total": $total, "score": $score}]')
+          done
+
+          SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+          jq -n \
+            --argjson runNumber ${{ github.run_number }} \
+            --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg sha "$SHORT_SHA" \
+            --arg conclusion "$OVERALL" \
+            --argjson models "$MODELS_JSON" \
+            '{runNumber: $runNumber, date: $date, sha: $sha, conclusion: $conclusion, models: $models}' \
+            > benchmark-data.json
+
+          echo "Collected benchmark data:"
+          cat benchmark-data.json
+
+      - name: Setup Ollama
+        run: curl -fsSL https://ollama.com/install.sh | sh
+        env:
+          OLLAMA_API_KEY: ${{ secrets.OLLAMA_API_KEY }}
+
+      - name: Generate AI summary with glm-5
+        id: ai_summary
+        continue-on-error: true
+        run: |
+          # Validate API key is present
+          if [ -z "$OLLAMA_API_KEY" ]; then
+            echo "Warning: OLLAMA_API_KEY is not set, skipping AI summary"
+            exit 0
+          fi
+
+          DATA=$(cat benchmark-data.json)
+
+          # Build the request payload safely using jq to avoid injection
+          REQUEST_PAYLOAD=$(jq -n \
+            --arg model "glm-5" \
+            --arg content "You are a helpful assistant analyzing LLM model benchmark results for smol-agent, a coding agent. Based on the following JSON benchmark results, write a concise 2-3 sentence analysis identifying which models performed well, which struggled, and any notable patterns. Results: $DATA" \
+            '{model: $model, messages: [{role: "user", content: $content}], stream: false}')
+
+          HTTP_STATUS=$(curl -s -o /tmp/ollama-response.json -w "%{http_code}" \
+            --max-time 60 \
+            -X POST https://ollama.com/api/chat \
+            -H "Authorization: Bearer $OLLAMA_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d "$REQUEST_PAYLOAD")
+
+          if [ "$HTTP_STATUS" != "200" ]; then
+            echo "Warning: Ollama API returned HTTP $HTTP_STATUS, skipping AI summary"
+            exit 0
+          fi
+
+          SUMMARY=$(jq -r '.message.content // empty' /tmp/ollama-response.json)
+
+          if [ -z "$SUMMARY" ]; then
+            echo "Warning: Could not extract summary from glm-5 response"
+            exit 0
+          fi
+
+          echo "AI Summary: $SUMMARY"
+
+          # Inject summary into benchmark-data.json
+          jq --arg summary "$SUMMARY" '. + {summary: $summary}' benchmark-data.json > benchmark-data-final.json
+          mv benchmark-data-final.json benchmark-data.json
+        env:
+          OLLAMA_API_KEY: ${{ secrets.OLLAMA_API_KEY }}
+
+      - name: Generate benchmark SVG image
+        run: node scripts/generate-benchmark-image.js --input benchmark-data.json
+        continue-on-error: true
+
+      - name: Commit and push benchmark image
+        if: github.ref == 'refs/heads/main'
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add docs/benchmark-results.svg
+          if git diff --staged --quiet; then
+            echo "No changes to benchmark image, skipping commit"
+          else
+            git commit -m "chore: update benchmark results image [skip ci]"
+            git push || { echo "::warning::Failed to push benchmark image update"; exit 0; }
+            echo "✓ Benchmark image committed and pushed"
+          fi
 
       - name: Generate summary
         run: |
@@ -226,6 +366,17 @@ jobs:
           fi
 
           echo "" >> summary.md
+
+          # Append AI analysis if available
+          if [ -f benchmark-data.json ]; then
+            AI_SUMMARY=$(jq -r '.summary // empty' benchmark-data.json)
+            if [ -n "$AI_SUMMARY" ]; then
+              echo "## AI Analysis (glm-5)" >> summary.md
+              echo "" >> summary.md
+              echo "$AI_SUMMARY" >> summary.md
+              echo "" >> summary.md
+            fi
+          fi
 
           # List all test outputs
           for dir in results/test-output-*; do

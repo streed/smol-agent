@@ -4,7 +4,8 @@
  * Generate a benchmark results image from GitHub Actions data.
  * 
  * Usage:
- *   node scripts/generate-benchmark-image.js
+ *   node scripts/generate-benchmark-image.js                  # fetch from GitHub API
+ *   node scripts/generate-benchmark-image.js --input <file>   # read from local JSON file
  * 
  * Output: docs/benchmark-results.svg
  */
@@ -15,7 +16,13 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// Fetch latest benchmark run results
+// Read results from a local JSON file (produced by the workflow)
+function readLocalResults(inputFile) {
+  const data = JSON.parse(fs.readFileSync(inputFile, "utf8"));
+  return data;
+}
+
+// Fetch latest benchmark run results from GitHub API
 async function fetchBenchmarkResults() {
   // Get all recent runs
   const runsRes = await fetch(
@@ -46,6 +53,9 @@ async function fetchBenchmarkResults() {
           const modelTests = testJobs.map(job => ({
             name: job.name.replace("Test ", "").replace(/:cloud$/, ""),
             status: job.conclusion === "success" ? "pass" : "fail",
+            passed: job.conclusion === "success" ? 1 : 0,
+            total: 1,
+            score: job.conclusion === "success" ? 1.0 : 0.0,
           }));
           return {
             runNumber: r.run_number,
@@ -73,6 +83,9 @@ async function fetchBenchmarkResults() {
     .map(job => ({
       name: job.name.replace("Test ", "").replace(/:cloud$/, ""),
       status: job.conclusion === "success" ? "pass" : "fail",
+      passed: job.conclusion === "success" ? 1 : 0,
+      total: 1,
+      score: job.conclusion === "success" ? 1.0 : 0.0,
     }));
 
   return {
@@ -84,16 +97,39 @@ async function fetchBenchmarkResults() {
   };
 }
 
+// Wrap text into lines that fit within maxWidth characters
+function wrapText(text, maxWidth) {
+  const words = text.split(" ");
+  const lines = [];
+  let current = "";
+  for (const word of words) {
+    const candidate = current ? `${current} ${word}` : word;
+    if (candidate.length <= maxWidth) {
+      current = candidate;
+    } else {
+      if (current) lines.push(current);
+      current = word;
+    }
+  }
+  if (current) lines.push(current);
+  return lines;
+}
+
 // Generate SVG from results
 function generateSVG(results) {
   const padding = 40;
   const rowHeight = 50;
   const barMaxWidth = 300;
-  const nameWidth = 180;
+  const nameWidth = 200;
+  const scoreWidth = 60;
   const statusWidth = 80;
-  
-  const svgHeight = padding * 2 + results.models.length * rowHeight + 60;
-  const svgWidth = padding * 2 + nameWidth + barMaxWidth + statusWidth + 20;
+  const svgWidth = padding * 2 + nameWidth + barMaxWidth + scoreWidth + statusWidth + 20;
+
+  // Wrap the AI summary into lines (approx 80 chars wide at this SVG width)
+  const summaryLines = results.summary ? wrapText(results.summary, 80) : [];
+  const summaryHeight = summaryLines.length > 0 ? summaryLines.length * 20 + 30 : 0;
+
+  const svgHeight = padding * 2 + results.models.length * rowHeight + 120 + summaryHeight;
   
   const dateStr = new Date(results.date).toLocaleDateString("en-US", {
     year: "numeric",
@@ -102,46 +138,60 @@ function generateSVG(results) {
   });
   
   // Determine overall status
-  const hasFailures = results.models.some(m => m.status === "fail");
+  const hasFailures = results.models.some(m => m.status === "fail" || m.status === "error");
   const overallStatus = results.conclusion === "failure" || hasFailures ? "failed" : "passed";
   const statusEmoji = overallStatus === "passed" ? "✅" : "❌";
   
   let rows = results.models.map((model, i) => {
-    const y = padding + 80 + i * rowHeight;
-    const passRate = model.status === "pass" ? "100%" : "0%";
-    const barWidth = model.status === "pass" ? barMaxWidth : barMaxWidth * 0.3;
-    const barColor = model.status === "pass" ? "#22c55e" : "#ef4444";
-    const statusColor = model.status === "pass" ? "#166534" : "#991b1b";
-    const statusBg = model.status === "pass" ? "#dcfce7" : "#fee2e2";
+    const y = padding + 120 + i * rowHeight;
+    const passed = model.passed ?? (model.status === "pass" ? 1 : 0);
+    const total = model.total ?? 1;
+    const scoreLabel = `${passed}/${total}`;
+    const pct = total > 0 ? Math.round((passed / total) * 100) : 0;
+    const barWidth = total > 0 ? barMaxWidth * (passed / total) : 0;
+    const isPass = model.status === "pass";
+    const isError = model.status === "error";
+    const barColor = isPass ? "#22c55e" : "#ef4444";
+    const statusColor = isPass ? "#166534" : "#991b1b";
+    const statusBg = isPass ? "#dcfce7" : "#fee2e2";
+    const badgeLabel = isError ? "ERROR" : model.status.toUpperCase();
     
     return `
     <g transform="translate(0, ${y})">
-      <!-- Model name -->
       <text x="${padding}" y="20" class="model-name" fill="#1f2937">${model.name}</text>
-      
-      <!-- Progress bar background -->
       <rect x="${padding + nameWidth}" y="5" width="${barMaxWidth}" height="16" rx="4" fill="#e5e7eb"/>
-      
-      <!-- Progress bar fill -->
       <rect x="${padding + nameWidth}" y="5" width="${barWidth}" height="16" rx="4" fill="${barColor}"/>
-      
-      <!-- Percentage -->
-      <text x="${padding + nameWidth + barMaxWidth + 15}" y="20" class="score" fill="${statusColor}">${passRate}</text>
-      
-      <!-- Status badge -->
+      <text x="${padding + nameWidth + barMaxWidth + 10}" y="20" class="score" fill="${statusColor}">${scoreLabel}</text>
+      <text x="${padding + nameWidth + barMaxWidth + scoreWidth + 10}" y="20" class="score" fill="${statusColor}">${pct}%</text>
       <rect x="${svgWidth - padding - statusWidth}" y="0" width="${statusWidth}" height="24" rx="4" fill="${statusBg}"/>
-      <text x="${svgWidth - padding - statusWidth + 12}" y="17" class="status" fill="${statusColor}">${model.status.toUpperCase()}</text>
+      <text x="${svgWidth - padding - statusWidth + 8}" y="17" class="status" fill="${statusColor}">${badgeLabel}</text>
     </g>`;
   }).join("");
-  
+
+  // AI summary section
+  let summarySection = "";
+  if (summaryLines.length > 0) {
+    const summaryY = padding + 120 + results.models.length * rowHeight + 20;
+    const summaryTextLines = summaryLines
+      .map((line, i) => `<text x="${padding}" y="${summaryY + 20 + i * 20}" class="summary" fill="#374151">${line}</text>`)
+      .join("\n  ");
+    summarySection = `
+  <!-- Divider before summary -->
+  <line x1="${padding}" y1="${summaryY}" x2="${svgWidth - padding}" y2="${summaryY}" stroke="#e5e7eb" stroke-width="1"/>
+  <text x="${padding}" y="${summaryY - 6}" class="section-label" fill="#6b7280">AI ANALYSIS (glm-5)</text>
+  ${summaryTextLines}`;
+  }
+
   return `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="${svgWidth}" height="${svgHeight}" viewBox="0 0 ${svgWidth} ${svgHeight}">
   <style>
     .title { font: bold 24px sans-serif; fill: #111827; }
     .subtitle { font: 14px sans-serif; fill: #6b7280; }
     .model-name { font: 500 14px sans-serif; }
-    .score { font: bold 14px sans-serif; }
+    .score { font: bold 13px sans-serif; }
     .status { font: bold 11px sans-serif; }
+    .summary { font: 13px sans-serif; }
+    .section-label { font: bold 11px sans-serif; }
   </style>
   
   <!-- Background -->
@@ -152,36 +202,55 @@ function generateSVG(results) {
   <text x="${padding}" y="55" class="subtitle">Run #${results.runNumber} • ${dateStr} • ${results.sha} • ${overallStatus.toUpperCase()}</text>
   
   <!-- Legend -->
-  <g transform="translate(${padding}, ${padding + 65})">
+  <g transform="translate(${padding}, ${padding + 70})">
     <rect width="12" height="12" rx="2" fill="#22c55e"/>
     <text x="18" y="10" font="12px sans-serif" fill="#374151">Pass</text>
-    <rect x="50" width="12" height="12" rx="2" fill="#ef4444"/>
-    <text x="68" y="10" font="12px sans-serif" fill="#374151">Fail</text>
+    <rect x="55" width="12" height="12" rx="2" fill="#ef4444"/>
+    <text x="73" y="10" font="12px sans-serif" fill="#374151">Fail</text>
   </g>
   
   <!-- Column headers -->
-  <g transform="translate(0, ${padding + 80})">
+  <g transform="translate(0, ${padding + 100})">
     <text x="${padding}" y="0" font="bold 12px sans-serif" fill="#6b7280">MODEL</text>
     <text x="${padding + nameWidth}" y="0" font="bold 12px sans-serif" fill="#6b7280">RESULT</text>
+    <text x="${padding + nameWidth + barMaxWidth + 10}" y="0" font="bold 12px sans-serif" fill="#6b7280">SCORE</text>
+    <text x="${padding + nameWidth + barMaxWidth + scoreWidth + 10}" y="0" font="bold 12px sans-serif" fill="#6b7280">%</text>
   </g>
   
   <!-- Divider -->
-  <line x1="${padding}" y1="${padding + 95}" x2="${svgWidth - padding}" y2="${padding + 95}" stroke="#e5e7eb" stroke-width="1"/>
+  <line x1="${padding}" y1="${padding + 115}" x2="${svgWidth - padding}" y2="${padding + 115}" stroke="#e5e7eb" stroke-width="1"/>
   
   ${rows}
+  ${summarySection}
 </svg>`;
 }
 
 async function main() {
-  console.log("Fetching benchmark results from GitHub Actions...");
-  
-  const results = await fetchBenchmarkResults();
+  // Check for --input flag
+  const inputFlagIndex = process.argv.indexOf("--input");
+  const inputFile = inputFlagIndex > -1 ? process.argv[inputFlagIndex + 1] : null;
+
+  let results;
+  if (inputFile) {
+    console.log(`Reading benchmark results from ${inputFile}...`);
+    results = readLocalResults(inputFile);
+  } else {
+    console.log("Fetching benchmark results from GitHub Actions...");
+    results = await fetchBenchmarkResults();
+  }
   
   console.log(`Found results for ${results.models.length} models:`);
-  results.models.forEach(m => console.log(`  - ${m.name}: ${m.status}`));
+  results.models.forEach(m => {
+    const score = m.total !== null && m.total !== undefined ? ` (${m.passed}/${m.total})` : "";
+    console.log(`  - ${m.name}: ${m.status}${score}`);
+  });
+  
+  if (results.summary) {
+    console.log(`\nAI Summary: ${results.summary}`);
+  }
   
   // Check if any model failed
-  const failedModels = results.models.filter(m => m.status === "fail");
+  const failedModels = results.models.filter(m => m.status === "fail" || m.status === "error");
   const hasFailures = failedModels.length > 0;
   
   if (hasFailures) {
