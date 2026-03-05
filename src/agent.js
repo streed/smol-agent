@@ -1,12 +1,14 @@
 import { EventEmitter } from "node:events";
 import * as ollama from "./ollama.js";
 import * as registry from "./tools/registry.js";
-import { gatherContext } from "./context.js";
+import { gatherContext, loadScopedRules } from "./context.js";
 import { logger } from "./logger.js";
 import { ContextManager } from "./context-manager.js";
 import { getCurrentPlan } from "./tools/save_plan.js";
 import { parseToolCallsFromContent } from "./tool-call-parser.js";
 import { classifyError, formatUserError } from "./errors.js";
+import { prehydrate } from "./prehydrate.js";
+import { ShiftLeftFeedback } from "./shift-left.js";
 
 // Import all tools so they self-register
 import "./tools/run_command.js";
@@ -110,9 +112,9 @@ const SYSTEM_PROMPT = `You are smol-agent, an EXECUTOR that writes and modifies 
 Do NOT describe what you would do — call the tool immediately.
 
 ## Workflow
-1. **Explore** — list_files, grep, read_file to understand the codebase.
+1. **Explore** — list_files, grep, read_file to understand the codebase. (Referenced files may be pre-loaded for you.)
 2. **Edit** — replace_in_file for surgical changes; write_file for new files.
-3. **Verify** — re-read modified files to confirm changes. Run tests/linters if available.
+3. **Verify** — re-read modified files to confirm changes. Lint runs automatically after edits — fix any reported errors.
 4. **Report** — one short paragraph summarising what you changed and why.
 
 ## Reasoning
@@ -141,6 +143,8 @@ Then immediately call a tool — do NOT narrate after thinking.
 - If a command fails, analyze the error output before retrying blindly.
 - If you're stuck after 2 failed attempts, step back and try a different approach.
 - To test HTTP servers, start the server in the background and use curl to hit endpoints (e.g. \`node server.js & sleep 1 && curl http://localhost:PORT/endpoint\`).
+- When lint errors appear in [Shift-left] messages, fix them immediately — you have at most 2 fix rounds before the lint budget is exhausted.
+- Follow any coding rules from shared rule files (.cursorrules, CLAUDE.md, etc.) shown in project context.
 
 ## Example tool call
 When the user asks "Add a hello() function to utils.js", respond with a tool call like:
@@ -254,6 +258,9 @@ export class Agent extends EventEmitter {
     // Approval system — handler set by UI, _approveAll toggled by user pressing "a"
     this._approvalHandler = null;
     this._approveAll = false;
+
+    // Shift-left feedback — auto-lint after file modifications (Stripe Minions pattern)
+    this._shiftLeft = new ShiftLeftFeedback(this.jailDirectory);
 
     // Set the global jail directory for all tools
     registry.setJailDirectory(this.jailDirectory);
@@ -419,7 +426,37 @@ export class Agent extends EventEmitter {
     this._verifiedFiles = new Set();
     this._recentToolCalls = [];
     this._loopNudges = 0;
+    this._shiftLeft.reset();
     this.messages.push({ role: "user", content: userMessage });
+
+    // ── Pre-hydration (Stripe Minions pattern) ──
+    // Deterministically pre-load files referenced in the user message so
+    // the model has immediate context without burning tool-call round-trips.
+    try {
+      const hydration = await prehydrate(userMessage, this.jailDirectory);
+      if (hydration.summary) {
+        this.messages.push({ role: "user", content: hydration.summary });
+        this.emit("prehydrate", { files: hydration.files.map(f => f.path) });
+      }
+
+      // ── Subdirectory-scoped rules (Stripe Minions pattern) ──
+      // Load AGENT.md rules for subdirectories referenced in the message.
+      const dirs = hydration.files
+        .filter(f => f.path.includes("/"))
+        .map(f => f.path.substring(0, f.path.lastIndexOf("/")));
+      const seenDirs = new Set();
+      for (const dir of dirs) {
+        if (seenDirs.has(dir)) continue;
+        seenDirs.add(dir);
+        const scopedRules = await loadScopedRules(this.jailDirectory, dir);
+        if (scopedRules) {
+          this.messages.push({ role: "user", content: scopedRules });
+          logger.info(`Loaded scoped rules for ${dir}/`);
+        }
+      }
+    } catch (err) {
+      logger.debug(`Pre-hydration skipped: ${err.message}`);
+    }
 
     // Progressive compression of old messages (cheap, always runs)
     this.contextManager.compressOldMessages(this.messages);
@@ -738,6 +775,16 @@ export class Agent extends EventEmitter {
         // ── Track file operations for verify step ──
         trackFileOperations(uniqueToolCalls, results, this._modifiedFiles, this._verifiedFiles);
 
+        // Track file modifications for shift-left feedback
+        for (let i = 0; i < uniqueToolCalls.length; i++) {
+          const tc = uniqueToolCalls[i];
+          const result = results[i];
+          const name = tc.function.name;
+          if ((name === "write_file" || name === "replace_in_file") && !result?.error) {
+            this._shiftLeft.trackModification(tc.function.arguments?.filePath);
+          }
+        }
+
         // ── Analyze results for self-correction hints ──
         const suggestions = analyzeToolResults(results, uniqueToolCalls);
         if (suggestions.length > 0) {
@@ -755,6 +802,28 @@ export class Agent extends EventEmitter {
             role: "user",
             content: `[Auto-hint] ${suggestions.join(" ")}`,
           });
+        }
+
+        // ── Shift-left feedback (Stripe Minions pattern) ──
+        // Auto-run lint after file modifications to catch errors early.
+        // Capped at 2 rounds to avoid infinite fix loops.
+        if (this._shiftLeft.shouldLint()) {
+          try {
+            const lintResult = await this._shiftLeft.runLint();
+            if (lintResult) {
+              this.emit("shift_left", lintResult);
+              if (!lintResult.passed) {
+                this.messages.push({
+                  role: "user",
+                  content: `${lintResult.message}\n\nFix the lint errors above before continuing.`,
+                });
+              } else {
+                logger.info(lintResult.message);
+              }
+            }
+          } catch (err) {
+            logger.debug(`Shift-left lint skipped: ${err.message}`);
+          }
         }
       } catch (err) {
         // ── Agent-level retry for transient errors ──
@@ -839,6 +908,7 @@ export class Agent extends EventEmitter {
     this._loopNudges = 0;
     this._pendingInjections = [];
     this._approveAll = false;
+    this._shiftLeft.reset();
   }
 
   /** Get the current project context as a string. */

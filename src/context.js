@@ -40,6 +40,11 @@ export async function gatherContext(cwd, contextSize = 100) {
   const agentMd = await readSnippet(cwd, "AGENT.md", contextSize);
   if (agentMd) sections.push(`## AGENT.md\n${agentMd}`);
 
+  // 5b. Shared coding rules — consume the same rule files as other tools
+  //     (Stripe finding: agents should share coding rules with human tools)
+  const codingRules = await loadSharedCodingRules(cwd, contextSize);
+  if (codingRules) sections.push(codingRules);
+
   // 6. Persistent memories from previous sessions
   try {
     const memories = await loadMemories(cwd);
@@ -153,4 +158,91 @@ async function readSnippet(cwd, filename, maxLines) {
   } catch {
     return null;
   }
+}
+
+// ── Shared coding rules ──────────────────────────────────────────────
+//
+// Stripe Minions finding: agents should consume the same coding rule files
+// that human tools (Cursor, Claude, Windsurf, etc.) use.  This ensures
+// consistent style and conventions across all tools.
+
+const CODING_RULE_FILES = [
+  // Cursor
+  ".cursorrules",
+  ".cursor/rules",
+  // Cline / Roo
+  ".clinerules",
+  // Windsurf
+  ".windsurfrules",
+  // Claude Code
+  "CLAUDE.md",
+  // Aider
+  ".aider.conf.yml",
+  // Copilot
+  ".github/copilot-instructions.md",
+];
+
+/**
+ * Load shared coding rule files from the project root.
+ * Returns a formatted section string, or null if none found.
+ */
+async function loadSharedCodingRules(cwd, maxLines = 50) {
+  const found = [];
+
+  for (const file of CODING_RULE_FILES) {
+    // Skip AGENT.md — we already load it separately
+    if (file === "AGENT.md") continue;
+
+    const snippet = await readSnippet(cwd, file, maxLines);
+    if (snippet) {
+      found.push({ file, content: snippet });
+    }
+  }
+
+  if (found.length === 0) return null;
+
+  const blocks = found.map(
+    (f) => `### ${f.file}\n${f.content}`
+  );
+
+  return `## Shared coding rules\nDetected rule files used by other tools — follow these conventions:\n\n${blocks.join("\n\n")}`;
+}
+
+// ── Subdirectory-scoped rules ────────────────────────────────────────
+//
+// Stripe Minions finding: conditional agent rules applied based on
+// subdirectories.  This allows different conventions per module.
+
+/**
+ * Load AGENT.md rules scoped to a specific subdirectory.
+ * Walks from the target directory up to the project root, collecting
+ * any AGENT.md files found (most specific first).
+ *
+ * @param {string} cwd - Project root
+ * @param {string} targetDir - The subdirectory being worked in
+ * @param {number} maxLines - Max lines per file
+ * @returns {Promise<string|null>} Formatted rules section or null
+ */
+export async function loadScopedRules(cwd, targetDir, maxLines = 30) {
+  const projectRoot = path.resolve(cwd);
+  let current = path.resolve(cwd, targetDir);
+  const rules = [];
+
+  // Walk up from target to root, collecting AGENT.md files
+  while (current.startsWith(projectRoot) && current !== projectRoot) {
+    const agentMd = await readSnippet(current, "AGENT.md", maxLines);
+    if (agentMd) {
+      const relDir = path.relative(projectRoot, current) || ".";
+      rules.push({ dir: relDir, content: agentMd });
+    }
+    current = path.dirname(current);
+  }
+
+  if (rules.length === 0) return null;
+
+  const blocks = rules.map(
+    (r) => `### Rules for ${r.dir}/\n${r.content}`
+  );
+
+  return `## Subdirectory rules\n${blocks.join("\n\n")}`;
 }

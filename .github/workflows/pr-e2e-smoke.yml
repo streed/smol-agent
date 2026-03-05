@@ -1,0 +1,128 @@
+name: PR E2E Smoke Test
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  e2e-smoke:
+    name: E2E Smoke Test
+    runs-on: ubuntu-latest
+    environment: Model Test
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+          cache: "npm"
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y g++
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate API Key
+        run: |
+          if [ -z "${{ secrets.OLLAMA_API_KEY }}" ]; then
+            echo "::warning::OLLAMA_API_KEY not found — skipping E2E smoke test"
+            echo "skip=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          echo "skip=false" >> $GITHUB_OUTPUT
+        id: check_key
+
+      - name: Setup Ollama Cloud
+        if: steps.check_key.outputs.skip != 'true'
+        run: |
+          curl -fsSL https://ollama.com/install.sh | sh
+          echo "Using Ollama cloud model for PR smoke test"
+        env:
+          OLLAMA_API_KEY: ${{ secrets.OLLAMA_API_KEY }}
+
+      - name: Run E2E smoke test (single model)
+        id: e2e
+        if: steps.check_key.outputs.skip != 'true'
+        env:
+          # Use a single fast model for PR checks
+          SMOL_TEST_MODEL: devstral-small-2:24b
+          OLLAMA_API_KEY: ${{ secrets.OLLAMA_API_KEY }}
+          OLLAMA_HOST: https://ollama.com
+
+          # Tight parameters for fast feedback
+          SMOL_TEST_RETRIES: 1
+          SMOL_TEST_MAX_ITER: 15
+          SMOL_TEST_CTX: 32768
+
+          # Short timeouts — PRs should get fast feedback
+          SMOL_TEST_TIMEOUT_SIMPLE: 120000
+          SMOL_TEST_TIMEOUT_MEDIUM: 240000
+          SMOL_TEST_TIMEOUT_COMPLEX: 360000
+        run: |
+          echo "=========================================="
+          echo "PR E2E Smoke Test — devstral-small-2:24b"
+          echo "=========================================="
+          echo ""
+
+          # Run tests — don't exit on failure, we check the score ourselves
+          node test/e2e/runner.js --json > test-results.json 2> test-output.log || true
+
+          cat test-output.log
+
+      - name: Check E2E score threshold
+        if: steps.check_key.outputs.skip != 'true'
+        run: |
+          SCORE_THRESHOLD=0.7
+
+          if [ ! -f test-results.json ] || ! jq empty test-results.json 2>/dev/null; then
+            echo "::error::E2E test results missing or invalid"
+            exit 1
+          fi
+
+          SCORE=$(jq -r '.aggregate.normalized' test-results.json)
+          PASSED=$(jq -r '.aggregate.passed' test-results.json)
+          TOTAL=$(jq -r '.aggregate.total' test-results.json)
+
+          echo ""
+          echo "=========================================="
+          echo "E2E Score: ${SCORE} (threshold: ${SCORE_THRESHOLD})"
+          echo "Passed: ${PASSED}/${TOTAL} scenarios"
+          echo "=========================================="
+          echo ""
+
+          # Fail the PR if score is below threshold
+          PASS=$(echo "$SCORE $SCORE_THRESHOLD" | awk '{print ($1 >= $2) ? "true" : "false"}')
+
+          if [ "$PASS" = "true" ]; then
+            echo "E2E score ${SCORE} meets threshold ${SCORE_THRESHOLD}"
+          else
+            echo "::error::E2E score ${SCORE} is below threshold ${SCORE_THRESHOLD} — PR blocked"
+
+            # Show which scenarios failed for quick diagnosis
+            echo ""
+            echo "Failed scenarios:"
+            jq -r '.results[] | select(.passed == false) | "  ✗ \(.name): \(.score) — \(.checks | map(select(.passed == false)) | map(.name) | join(", "))"' test-results.json
+
+            exit 1
+          fi
+
+      - name: Upload test output
+        uses: actions/upload-artifact@v4
+        if: always() && steps.check_key.outputs.skip != 'true'
+        with:
+          name: pr-e2e-results
+          path: |
+            test-output.log
+            test-results.json
+          retention-days: 7
