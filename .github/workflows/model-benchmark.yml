@@ -3,8 +3,6 @@ name: Model Benchmark
 on:
   push:
     branches: [main]
-  pull_request:
-    branches: [main]
   workflow_dispatch:
 
 jobs:
@@ -410,18 +408,3 @@ jobs:
         with:
           name: benchmark-summary-${{ steps.sanitize.outputs.short_sha }}
           path: summary.md
-
-      - name: Post summary to PR
-        if: github.event_name == 'pull_request'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const fs = require('fs');
-            const summary = fs.readFileSync('summary.md', 'utf8');
-
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: summary
-            });
