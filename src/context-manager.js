@@ -417,7 +417,7 @@ export class ContextManager {
       this.lastPromptTokens = 0;
     }
 
-    const result = systemMsg ? [systemMsg, ...keptMessages] : keptMessages;
+    const result = sanitizeMessageOrder(systemMsg ? [systemMsg, ...keptMessages] : keptMessages);
     return { messages: result, pruned: prunedCount };
   }
 
@@ -466,12 +466,12 @@ export class ContextManager {
       _summarized: true,
     };
     
-    const newMessages = systemMsg 
+    const newMessages = sanitizeMessageOrder(systemMsg
       ? [systemMsg, summaryMsg, ...toKeep]
-      : [summaryMsg, ...toKeep];
-    
+      : [summaryMsg, ...toKeep]);
+
     this.lastPromptTokens = 0; // Reset to force re-estimation
-    
+
     return { messages: newMessages, summarized: true };
   }
   
@@ -585,12 +585,46 @@ export class ContextManager {
       if (rest.length > MIN_KEEP_MESSAGES) {
         const minimal = rest.slice(-MIN_KEEP_MESSAGES);
         logger.warn(`Emergency context reduction: keeping only ${minimal.length} recent messages`);
-        return systemMsg ? [systemMsg, ...minimal] : minimal;
+        return sanitizeMessageOrder(systemMsg ? [systemMsg, ...minimal] : minimal);
       }
     }
 
-    return prunedMessages;
+    return sanitizeMessageOrder(prunedMessages);
   }
+}
+
+/**
+ * Sanitize message ordering to ensure 'tool' messages always follow an
+ * 'assistant' message with tool_calls.  Some LLM APIs (Ollama, OpenAI)
+ * reject sequences like user→tool.  This can happen after importance-based
+ * pruning or emergency slicing removes the assistant message that originally
+ * triggered the tool calls.
+ *
+ * Strategy: walk the array and drop any 'tool' message that is not immediately
+ * preceded by either another 'tool' message or an 'assistant' message carrying
+ * tool_calls.  This is the cheapest fix that preserves valid sequences.
+ */
+function sanitizeMessageOrder(messages) {
+  if (!Array.isArray(messages) || messages.length === 0) return messages;
+
+  const result = [messages[0]]; // always keep first (system)
+
+  for (let i = 1; i < messages.length; i++) {
+    const msg = messages[i];
+    if (msg.role === 'tool') {
+      const prev = result[result.length - 1];
+      // Valid predecessors: assistant with tool_calls, or another tool message
+      if (prev && (prev.role === 'tool' || (prev.role === 'assistant' && prev.tool_calls))) {
+        result.push(msg);
+      } else {
+        logger.debug(`Dropped orphaned tool message at index ${i} (preceded by ${prev?.role})`);
+      }
+    } else {
+      result.push(msg);
+    }
+  }
+
+  return result;
 }
 
 /**
