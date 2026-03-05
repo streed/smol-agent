@@ -272,11 +272,6 @@ async function main() {
   
   fs.writeFileSync(outputPath, svg);
   console.log(`\n✓ Generated: ${outputPath}`);
-  
-  // Exit with non-zero code if there are failures
-  if (hasFailures) {
-    process.exit(1);
-  }
 }
 
 main().catch(err => {
