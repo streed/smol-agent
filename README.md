@@ -314,19 +314,11 @@ The Ink UI subscribes to `tool_call`, `tool_result`, `response`, and `error` eve
 
 smol-agent is tested against a variety of Ollama models to ensure it works well across different model sizes and capabilities. The benchmark runs end-to-end tests on each model, validating that tool calling, file operations, and command execution work correctly.
 
-![Model Benchmark Results](docs/benchmark-results.svg)
+### Latest Results
 
-### Tested Models
-
-| Model | Size | Best For |
-|-------|------|----------|
-| [qwen3-coder-next](https://ollama.com/library/qwen3-coder-next) | ~80B | Agentic coding workflows |
-| [devstral-small-2](https://ollama.com/library/devstral-small-2) | 24B | Tools & multi-file edits |
-| [rnj-1](https://ollama.com/library/rnj-1) | 8B | Code and STEM tasks |
-| [ministral-3:8b](https://ollama.com/library/ministral-3) | 8B | Edge deployment with tool support |
-| [ministral-3:3b](https://ollama.com/library/ministral-3) | 3B | Cloud-optimized with tool support |
-| [minimax-m2.5](https://ollama.com/library/minimax-m2.5) | ~230B | Productivity & coding |
-| [glm-5](https://ollama.com/library/glm-5) | ~744B | Reasoning & agentic tasks |
+<!-- BENCHMARK-RESULTS-START -->
+_No benchmark results yet. Results will appear here after the next benchmark run._
+<!-- BENCHMARK-RESULTS-END -->
 
 ### Running the Benchmark
 
@@ -350,16 +342,6 @@ The benchmark uses the following parameters:
 | `SMOL_TEST_RETRIES` | Number of retries on failure | 1 |
 | `SMOL_TEST_MAX_ITER` | Max tool call iterations per test | 20 |
 | `SMOL_TEST_CTX` | Context window size | 32768 |
-
-### Latest Results
-
-![Model Benchmark Results](docs/benchmark-results.svg)
-
-To regenerate the benchmark image after a new test run:
-
-```bash
-node scripts/generate-benchmark-image.js
-```
 
 Check the [GitHub Actions workflow](https://github.com/streed/smol-agent/actions) for the latest benchmark results. Each model run produces detailed test output showing which tasks passed or failed.
 

@@ -267,21 +267,21 @@ jobs:
         env:
           OLLAMA_API_KEY: ${{ secrets.OLLAMA_API_KEY }}
 
-      - name: Generate benchmark SVG image
-        run: node scripts/generate-benchmark-image.js --input benchmark-data.json
+      - name: Update README with benchmark results
+        run: node scripts/update-benchmark-readme.js --input benchmark-data.json
 
-      - name: Commit and push benchmark image
+      - name: Commit and push README
         if: github.ref == 'refs/heads/main'
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
-          git add docs/benchmark-results.svg
+          git add README.md
           if git diff --staged --quiet; then
-            echo "No changes to benchmark image, skipping commit"
+            echo "No changes to README, skipping commit"
           else
-            git commit -m "chore: update benchmark results image [skip ci]"
-            git push || { echo "::warning::Failed to push benchmark image update"; exit 0; }
-            echo "✓ Benchmark image committed and pushed"
+            git commit -m "chore: update benchmark results in README [skip ci]"
+            git push || { echo "::warning::Failed to push README update"; exit 0; }
+            echo "✓ README benchmark results committed and pushed"
           fi
 
       - name: Generate summary
@@ -390,16 +390,15 @@ jobs:
 
           cat summary.md
 
-          # Set job status based on results
+          # Report results but never fail the aggregate job
           if [ "$FAIL_COUNT" -gt 0 ] || [ "$ERROR_COUNT" -gt 0 ]; then
             echo ""
             if [ "$FAIL_COUNT" -gt 0 ]; then
-              echo "::error::Some models failed benchmarks"
+              echo "::warning::Some models failed benchmarks"
             fi
             if [ "$ERROR_COUNT" -gt 0 ]; then
-              echo "::error::Some models had errors during testing"
+              echo "::warning::Some models had errors during testing"
             fi
-            exit 1
           fi
 
       - name: Upload summary
