@@ -30,7 +30,7 @@ export async function run() {
   await seedFile(tmpDir, "src/.gitkeep", "");
 
   try {
-    const response = await runWithTimeout(
+    await runWithTimeout(
       agent,
       'Create a file src/calculator.js that exports functions add(a,b), subtract(a,b), and multiply(a,b). Each should return the correct result. Make sure the code is syntactically valid JavaScript.',
       meta.timeout,

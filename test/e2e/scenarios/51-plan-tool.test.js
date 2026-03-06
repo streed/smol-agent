@@ -5,10 +5,9 @@
  * through steps, and complete them.
  */
 import fs from "node:fs";
-import path from "node:path";
 import {
   createTestAgent, runWithTimeout, collectEvents,
-  scoreResult, check, seedFile, fileExists, readResult, cleanup,
+  scoreResult, check, fileExists, cleanup,
 } from "../harness.js";
 import { config } from "../config.js";
 
@@ -19,7 +18,7 @@ export async function run() {
   const events = collectEvents(agent);
 
   try {
-    const response = await runWithTimeout(
+    await runWithTimeout(
       agent,
       'Create a plan to build a simple calculator module, then execute the plan. The plan should have at least 3 steps: 1) Create the calculator.js file with add and subtract functions, 2) Create a test file test-calc.js that tests both functions, 3) Run the tests with node. Use the save_plan tool to create the plan first, then execute each step and mark them complete.',
       meta.timeout,

@@ -543,7 +543,6 @@ export class Agent extends EventEmitter {
           // shorter timeout between subsequent tokens
           const INITIAL_TIMEOUT = 180_000; // 3 min for first token
           const TOKEN_TIMEOUT = 60_000;    // 60s between tokens
-          let receivedFirstToken = false;
           let streamTimer = setTimeout(() => {
             streamTimedOut = true;
             if (this.abortController) {
@@ -552,7 +551,6 @@ export class Agent extends EventEmitter {
           }, INITIAL_TIMEOUT);
           const resetStreamTimer = () => {
             clearTimeout(streamTimer);
-            receivedFirstToken = true;
             if (!streamTimedOut) {
               streamTimer = setTimeout(() => {
                 streamTimedOut = true;

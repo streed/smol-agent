@@ -14,7 +14,7 @@ export const meta = { name: "shared-coding-rules", timeout: config.timeouts.medi
 
 export async function run() {
   const { agent, tmpDir } = createTestAgent();
-  const events = collectEvents(agent);
+  collectEvents(agent);
 
   // Seed a .cursorrules file with specific conventions
   await seedFile(tmpDir, ".cursorrules", `# Project Coding Rules
@@ -25,7 +25,7 @@ export async function run() {
 `);
 
   try {
-    const response = await runWithTimeout(
+    await runWithTimeout(
       agent,
       'Create a file parser.js with a function parseJSON(str) that parses a JSON string and returns the result, or returns null if parsing fails.',
       meta.timeout,

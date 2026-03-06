@@ -99,6 +99,57 @@ This makes agent responses much easier to read and understand at a glance.
   export OLLAMA_API_KEY=your-key-here
   ```
 
+### Running Ollama as a systemd Service (Linux)
+
+To run Ollama as a background service on Linux:
+
+1. Create a systemd unit file at `/etc/systemd/system/ollama.service`:
+
+   ```ini
+   [Unit]
+   Description=Ollama Service
+   After=network.target
+
+   [Service]
+   Type=simple
+   User=ollama
+   Group=ollama
+   ExecStart=/usr/local/bin/ollama serve
+   Restart=always
+   RestartSec=3
+   Environment="PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+   [Install]
+   WantedBy=multi-user.target
+   ```
+
+2. Create the ollama user (if not already created by the installer):
+
+   ```bash
+   sudo useradd -r -s /bin/false -m -d /usr/share/ollama ollama
+   ```
+
+3. Enable and start the service:
+
+   ```bash
+   sudo systemctl daemon-reload
+   sudo systemctl enable ollama
+   sudo systemctl start ollama
+   ```
+
+4. Verify it's running:
+
+   ```bash
+   sudo systemctl status ollama
+   ollama list  # should list your pulled models
+   ```
+
+**Optional configuration** (add to the `[Service]` section):
+
+- Set custom model storage: `Environment="OLLAMA_MODELS=/var/lib/ollama/models"`
+- Limit GPU access: `Environment="CUDA_VISIBLE_DEVICES=0"`
+- Expose to network: `Environment="OLLAMA_HOST=0.0.0.0:11434"`
+
 ## Install
 
 ### Quick Install (recommended)

@@ -14,7 +14,7 @@ export const meta = { name: "scoped-rules", timeout: config.timeouts.medium };
 
 export async function run() {
   const { agent, tmpDir } = createTestAgent();
-  const events = collectEvents(agent);
+  collectEvents(agent);
 
   // Seed subdirectory rules requiring snake_case function names
   await seedFile(tmpDir, "lib/AGENT.md", `# Conventions for lib/
@@ -33,7 +33,7 @@ module.exports = { get_timestamp };
 `);
 
   try {
-    const response = await runWithTimeout(
+    await runWithTimeout(
       agent,
       'Create a new file lib/validators.js with two functions: one to check if a string is a valid email (contains @ and .), and one to check if a number is positive.',
       meta.timeout,

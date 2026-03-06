@@ -15,7 +15,7 @@ export const meta = { name: "prehydration", timeout: config.timeouts.medium };
 
 export async function run() {
   const { agent, tmpDir } = createTestAgent();
-  const events = collectEvents(agent);
+  collectEvents(agent);
 
   // Seed a file that the user will reference by path
   await seedFile(tmpDir, "src/helpers.js", `

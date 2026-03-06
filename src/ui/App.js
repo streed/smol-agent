@@ -14,7 +14,7 @@ import {
 import chalk from "chalk";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { execSync, execFile } from "node:child_process";
+import { execFile } from "node:child_process";
 import { setAskHandler } from "../tools/ask_user.js";
 import { saveSetting } from "../settings.js";
 import { listModels } from "../ollama.js";
