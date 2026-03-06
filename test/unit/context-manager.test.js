@@ -9,7 +9,7 @@ import { describe, test, expect } from '@jest/globals';
 import { ContextManager } from '../../src/context-manager.js';
 
 /** Helper: check no tool message is preceded by a non-tool, non-assistant-with-tool_calls message */
-function assertValidOrder(messages, label) {
+function assertValidOrder(messages, _label) {
   for (let i = 1; i < messages.length; i++) {
     if (messages[i].role === 'tool') {
       const prev = messages[i - 1];

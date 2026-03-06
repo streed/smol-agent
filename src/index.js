@@ -107,7 +107,7 @@ function runSelfUpdate() {
 const args = process.argv.slice(2);
 let host = undefined;
 let model = undefined;
-let contextSize = undefined;
+
 let promptText = undefined;
 let jailDirectory = process.cwd();
 let allTools = undefined; // undefined = auto-detect from model size
@@ -120,8 +120,7 @@ for (let i = 0; i < args.length; i++) {
     host = args[++i];
   } else if ((a === "--model" || a === "-m") && args[i + 1]) {
     model = args[++i];
-  } else if ((a === "--context-size" || a === "-c") && args[i + 1]) {
-    contextSize = parseInt(args[++i]);
+
   } else if ((a === "--directory" || a === "-d") && args[i + 1]) {
     jailDirectory = path.resolve(args[++i]);
     if (!fs.existsSync(jailDirectory) || !fs.statSync(jailDirectory).isDirectory()) {
@@ -154,7 +153,7 @@ Usage:
 Options:
   -m, --model <name>        Ollama model to use (default: qwen3.5:27b)
   -H, --host <url>          Ollama server URL (default: http://127.0.0.1:11434)
-  -c, --context-size <num>  Max lines for AGENT.md snippet (default: 100)
+
   -d, --directory <path>    Set working directory and jail boundary (default: cwd)
       --all-tools           Expose all tools (auto-detected for 30B+ models)
       --auto-approve        Skip approval prompts for write/command tools (alias: --yolo)
@@ -198,7 +197,7 @@ if (acpMode) {
   startACPServer({
     host,
     model,
-    contextSize,
+
     coreToolsOnly,
     autoApprove,
   });

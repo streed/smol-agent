@@ -27,7 +27,7 @@ smol-agent gives a local language model the tools it needs to read, write, and e
 ## What it looks like
 
 ```
- smol-agent (model: qwen2.5-coder:7b)
+ smol-agent (model: qwen2.5-coder:32b)
 
  you> add error handling to the /users endpoint
 
@@ -40,7 +40,7 @@ smol-agent gives a local language model the tools it needs to read, write, and e
 Once the agent finishes its tool-call loop, it prints a response:
 
 ```
- smol-agent (model: qwen2.5-coder:7b)
+ smol-agent (model: qwen2.5-coder:32b)
 
  you> add error handling to the /users endpoint
 
@@ -90,10 +90,11 @@ This makes agent responses much easier to read and understand at a glance.
 
 - **Node.js** >= 18
 - **Ollama** running locally (default `http://127.0.0.1:11434`)
-- A model pulled in Ollama — the default is `qwen2.5-coder:7b`:
+- A model pulled in Ollama — the default is `qwen2.5-coder:32b`:
   ```
-  ollama pull qwen2.5-coder:7b
+  ollama pull qwen2.5-coder:32b
   ```
+  > **Note**: For machines with limited RAM, `qwen2.5-coder:7b` or `qwen3-coder:14b` work well too.
 - An [Ollama API key](https://ollama.com/settings/keys) (free) — required for `web_search` and `web_fetch` tools. Set it as `OLLAMA_API_KEY` in your environment:
   ```
   export OLLAMA_API_KEY=your-key-here
@@ -240,8 +241,13 @@ smol-agent "add input validation to src/api.js"
 
 | Flag | Description |
 |------|-------------|
-| `-m, --model <name>` | Ollama model to use (default: `qwen2.5-coder:7b`) |
+| `-m, --model <name>` | Ollama model to use (default: `qwen2.5-coder:32b`) |
 | `-H, --host <url>` | Ollama server URL (default: `http://127.0.0.1:11434`) |
+| `-d, --directory <path>` | Set working directory and jail boundary (default: cwd) |
+| `--all-tools` | Expose all tools (auto-detected for 30B+ models) |
+| `--auto-approve` | Skip approval prompts for write/command tools (alias: `--yolo`) |
+| `--acp` | Run as ACP (Agent Client Protocol) server over stdio |
+| `--self-update` | Update smol-agent to the latest version |
 | `--help` | Show help |
 
 ### Commands (interactive mode)
@@ -253,6 +259,7 @@ smol-agent "add input validation to src/api.js"
 | `/model list` | List available models |
 | `/inspect` | Dump current context to CONTEXT.md |
 | `/reload-skills` | Reload skills from global and local directories |
+| `/skills` | List available skills |
 | `exit` / `quit` | Exit the agent |
 | `Ctrl-C` | Cancel current operation / Exit on double tap |
 
@@ -295,7 +302,8 @@ The model decides which tools to call and when. It will loop — calling tools a
 
 smol-agent includes intelligent context management to handle large conversations without hitting token limits:
 
-- **Proactive pruning** — Removes old messages when approaching 70% of context capacity
+- **Proactive summarization** — At 55% capacity, starts LLM-based summarization of old messages
+- **Pruning** — At 70% capacity, removes old messages and large tool results
 - **Aggressive pruning** — At 85% capacity, more aggressively prunes history
 - **Tool result truncation** — Large outputs are automatically truncated to 15k characters
 - **Error recovery** — If Ollama returns a context overflow error, the agent prunes and informs you to retry
@@ -346,7 +354,7 @@ npm run test:e2e      # end-to-end tests
 
 ## Conventions
 - Test files go in test/unit/ with .test.js suffix
-- Use the custom test-utils.js helpers (describe, test, assertEqual, etc.)
+- Use Jest globals: `describe`, `test`, `expect` from `@jest/globals`
 ```
 
 On startup, the agent sees the `name` and `description` from frontmatter in its system prompt (with source: "global" or "local"). When a skill is relevant, it reads the full file for detailed instructions.
@@ -384,10 +392,8 @@ src/
 ├── ollama.js             Thin wrapper around the ollama npm package
 ├── path-utils.js         Path resolution and jail security
 ├── skills.js             Skill loading and frontmatter parsing
-├── plan-tracker.js       Plan state management and persistence
 ├── ui/
 │   ├── App.js            Ink (React) terminal UI — message log, spinner, input
-│   ├── MultilineInput.js Multiline text input with paste support
 │   └── markdown.js       Rich markdown rendering for terminal output
 └── tools/
     ├── registry.js       Tool registration and dispatch
@@ -398,6 +404,7 @@ src/
     ├── web_search.js     Web search via Ollama API
     ├── web_fetch.js      URL fetch via Ollama API
     ├── ask_user.js       Ask the user for clarification
+    ├── git.js            Git operations (with safety restrictions)
     ├── plan_tools.js     Plan management tools
     ├── save_plan.js      Plan persistence utilities
     ├── reflection.js     Work reflection and summarization
@@ -431,7 +438,7 @@ The benchmark is automated via GitHub Actions. To run it locally:
 npm install
 
 # Run E2E tests with a specific model
-SMOL_TEST_MODEL=qwen2.5-coder:7b node test/e2e/runner.js
+SMOL_TEST_MODEL=qwen2.5-coder:32b node test/e2e/runner.js
 ```
 
 ### Benchmark Configuration
@@ -440,7 +447,7 @@ The benchmark uses the following parameters:
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `SMOL_TEST_MODEL` | Model to test | `qwen2.5-coder:7b` |
+| `SMOL_TEST_MODEL` | Model to test | `qwen2.5-coder:32b` |
 | `SMOL_TEST_RETRIES` | Number of retries on failure | 1 |
 | `SMOL_TEST_MAX_ITER` | Max tool call iterations per test | 20 |
 | `SMOL_TEST_CTX` | Context window size | 32768 |
