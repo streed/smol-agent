@@ -6,7 +6,7 @@
  *
  * Shared between the main agent and sub-agent to avoid circular imports.
  */
-export function parseToolCallsFromContent(content) {
+export function parseToolCallsFromContent(content, { markAsTextParsed = true } = {}) {
   if (!content) return [];
 
   const MAX_PARSED_CALLS = 20;
@@ -78,10 +78,19 @@ export function parseToolCallsFromContent(content) {
 
   // Deduplicate — multiple regex patterns can match the same call
   const seen = new Set();
-  return calls.filter((c) => {
+  const deduplicated = calls.filter((c) => {
     const key = JSON.stringify({ name: c.function.name, args: c.function.arguments });
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
   });
+
+  // Mark calls as text-parsed for provenance tracking
+  if (markAsTextParsed) {
+    for (const call of deduplicated) {
+      call._textParsed = true;
+    }
+  }
+
+  return deduplicated;
 }

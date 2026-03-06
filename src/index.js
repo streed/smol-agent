@@ -5,6 +5,10 @@ import { startApp } from "./ui/App.js";
 import path from "node:path";
 import fs from "node:fs";
 import { loadSettings } from "./settings.js";
+import { cleanup as cleanupTiktoken } from "./token-estimator.js";
+
+// Free tiktoken WASM resources on exit
+process.on("exit", () => { cleanupTiktoken().catch(() => {}); });
 
 // ── CLI argument parsing ─────────────────────────────────────────────
 const args = process.argv.slice(2);

@@ -13,11 +13,12 @@ import { logger } from './logger.js';
 
 let encoding = null;
 let tiktokenAvailable = false;
+let _initPromise = null;
 
 // Lazy-load tiktoken
 async function initTiktoken() {
   if (encoding !== null) return encoding !== false;
-  
+
   try {
     const tiktoken = await import('tiktoken');
     // cl100k_base is the encoding for GPT-4/GPT-3.5-turbo
@@ -34,8 +35,16 @@ async function initTiktoken() {
   }
 }
 
-// Initialize on import
-initTiktoken();
+// Initialize on import — store promise so callers can await it
+_initPromise = initTiktoken();
+
+/**
+ * Wait for tiktoken to finish initializing.
+ * Call this during agent startup to ensure accurate token counts from the start.
+ */
+export async function ensureInitialized() {
+  if (_initPromise) await _initPromise;
+}
 
 /**
  * Estimate token count for text using tiktoken if available.

@@ -13,13 +13,21 @@ export const LEVELS = {
 // Get log level from environment or default to info
 const LOG_LEVEL = process.env.SMOL_AGENT_LOG_LEVEL || 'info';
 
-// Ensure state directory exists
-const stateDir = path.join(process.cwd(), '.smol-agent', 'state');
-if (!fs.existsSync(stateDir)) {
-  fs.mkdirSync(stateDir, { recursive: true });
-}
+// Deferred log path resolution — resolves on first write or when setBaseDir is called.
+// This prevents writing logs to the wrong directory when -d flag is used.
+let _baseDir = null;
+let _logFilePath = null;
 
-const logFilePath = path.join(stateDir, 'agent.log');
+function getLogFilePath() {
+  if (_logFilePath) return _logFilePath;
+  const base = _baseDir || process.cwd();
+  const stateDir = path.join(base, '.smol-agent', 'state');
+  if (!fs.existsSync(stateDir)) {
+    fs.mkdirSync(stateDir, { recursive: true });
+  }
+  _logFilePath = path.join(stateDir, 'agent.log');
+  return _logFilePath;
+}
 
 /**
  * Format a log message with timestamp and level
@@ -36,11 +44,19 @@ function formatMessage(level, message) {
 function writeLog(level, message) {
   try {
     const formatted = formatMessage(level, message);
-    fs.appendFileSync(logFilePath, formatted + '\n', 'utf-8');
-  } catch (err) {
-    // Fallback: don't fail if log writing fails
-    console.error(`Failed to write log: ${err.message}`);
+    fs.appendFileSync(getLogFilePath(), formatted + '\n', 'utf-8');
+  } catch {
+    // Silently ignore log write failures — don't pollute stderr
   }
+}
+
+/**
+ * Set the base directory for log files.
+ * Call this early in startup when the jail directory is known.
+ */
+export function setLogBaseDir(dir) {
+  _baseDir = dir;
+  _logFilePath = null; // Reset so next write re-resolves
 }
 
 /**
@@ -134,7 +150,7 @@ export function isTransientError(err) {
  */
 export function readRecentLogs(maxLines = 500) {
   try {
-    const content = fs.readFileSync(logFilePath, 'utf-8');
+    const content = fs.readFileSync(getLogFilePath(), 'utf-8');
     const lines = content.split('\n').filter(l => l.trim());
     return lines.slice(-maxLines).join('\n');
   } catch {
@@ -143,11 +159,11 @@ export function readRecentLogs(maxLines = 500) {
 }
 
 /**
- * Get the log file path.
+ * Get the current log file path.
  * @returns {string} Path to the log file
  */
-export function getLogFilePath() {
-  return logFilePath;
+export function getLogPath() {
+  return getLogFilePath();
 }
 
 export default {
@@ -157,5 +173,6 @@ export default {
   isTransientError,
   LEVELS,
   readRecentLogs,
-  getLogFilePath,
+  getLogPath,
+  setLogBaseDir,
 };

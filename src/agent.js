@@ -2,12 +2,13 @@ import { EventEmitter } from "node:events";
 import * as ollama from "./ollama.js";
 import * as registry from "./tools/registry.js";
 import { gatherContext, loadScopedRules } from "./context.js";
-import { logger } from "./logger.js";
+import { logger, setLogBaseDir } from "./logger.js";
 import { ContextManager } from "./context-manager.js";
 import { getCurrentPlan } from "./tools/save_plan.js";
 import { parseToolCallsFromContent } from "./tool-call-parser.js";
 import { classifyError, formatUserError } from "./errors.js";
 import { prehydrate } from "./prehydrate.js";
+import { ensureInitialized as ensureTiktoken } from "./token-estimator.js";
 import { ShiftLeftFeedback } from "./shift-left.js";
 
 // Import all tools so they self-register
@@ -240,6 +241,7 @@ export class Agent extends EventEmitter {
     this.contextSize = contextSize; // AGENT.md line limit only
     this.maxTokens = maxTokens || 128000;
     this.jailDirectory = jailDirectory || process.cwd();
+    setLogBaseDir(this.jailDirectory);
     this.messages = [];
     this.running = false;
     this._initialized = false;
@@ -337,6 +339,9 @@ export class Agent extends EventEmitter {
    */
   async _init() {
     if (this._initialized) return;
+
+    // Ensure tiktoken is ready for accurate token counting
+    await ensureTiktoken();
 
     let contextBlock = "";
     try {
@@ -437,8 +442,12 @@ export class Agent extends EventEmitter {
     this._recentToolCalls = [];
     this._loopNudges = 0;
     this._shiftLeft.reset();
-    this._pendingInjections = [];
+    // Drain (not clear) pending injections to avoid losing messages queued during async init
+    const earlyInjections = this._pendingInjections.splice(0);
     this.messages.push({ role: "user", content: userMessage });
+    for (const injected of earlyInjections) {
+      this.messages.push({ role: "user", content: injected });
+    }
 
     // ── Pre-hydration (Stripe Minions pattern) ──
     // Deterministically pre-load files referenced in the user message so
@@ -530,22 +539,27 @@ export class Agent extends EventEmitter {
 
           this.emit("stream_start");
 
-          // Stream timeout — abort if no token arrives within 60 seconds
+          // Stream timeout — longer initial wait (first token can be slow on large contexts),
+          // shorter timeout between subsequent tokens
+          const INITIAL_TIMEOUT = 180_000; // 3 min for first token
+          const TOKEN_TIMEOUT = 60_000;    // 60s between tokens
+          let receivedFirstToken = false;
           let streamTimer = setTimeout(() => {
             streamTimedOut = true;
             if (this.abortController) {
               this.abortController.abort();
             }
-          }, 60_000);
+          }, INITIAL_TIMEOUT);
           const resetStreamTimer = () => {
             clearTimeout(streamTimer);
+            receivedFirstToken = true;
             if (!streamTimedOut) {
               streamTimer = setTimeout(() => {
                 streamTimedOut = true;
                 if (this.abortController) {
                   this.abortController.abort();
                 }
-              }, 60_000);
+              }, TOKEN_TIMEOUT);
             }
           };
 
@@ -636,6 +650,13 @@ export class Agent extends EventEmitter {
           if (toolCalls.length > 0) {
             const allowedNames = new Set(tools.map(t => t.function.name));
             toolCalls = toolCalls.filter(tc => allowedNames.has(tc.function.name));
+            // Block dangerous tools invoked via text-parsed calls (higher injection risk)
+            const DANGEROUS_TOOLS = new Set(["run_command", "write_file"]);
+            const hadDangerous = toolCalls.some(tc => DANGEROUS_TOOLS.has(tc.function.name) && tc._textParsed);
+            if (hadDangerous) {
+              logger.warn("Blocked dangerous tool call from text-parsed content (potential prompt injection)");
+              toolCalls = toolCalls.filter(tc => !(DANGEROUS_TOOLS.has(tc.function.name) && tc._textParsed));
+            }
           }
         }
 

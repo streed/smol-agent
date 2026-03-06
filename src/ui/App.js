@@ -14,11 +14,11 @@ import {
 import chalk from "chalk";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { execSync } from "node:child_process";
+import { execSync, execFile } from "node:child_process";
 import { setAskHandler } from "../tools/ask_user.js";
 import { saveSetting } from "../settings.js";
 import { listModels } from "../ollama.js";
-import { readRecentLogs } from "../logger.js";
+import { logger, readRecentLogs } from "../logger.js";
 
 // ═══ Loading animation (SMOL AGENT rain effect) ═══
 
@@ -231,8 +231,10 @@ class StatusArea {
       const hasMarkdown = sLines[0].match(/\*\*.*?\*/s) !== null || sLines[0].match(/\*\.?.*?\*/s) !== null || sLines[0].match(/\*\[.*?\]\*/s) !== null;
       
       if (hasMarkdown) {
-        // Render the first line as markdown
-        lines.push(new Markdown(sLines[0], 1, 0, markdownTheme));
+        // Render the first line as markdown — must spread rendered strings,
+        // not push the Markdown component itself (pi-tui expects strings).
+        const md = new Markdown(sLines[0], 1, 0, markdownTheme);
+        lines.push(...md.render(width));
       } else {
         // Render as plain text
         const firstLine = chalk.cyan.bold(" ▸  ") + sLines[0] + (sLines.length === 1 ? cursor : "");
@@ -314,7 +316,21 @@ class ChatView {
       editorLines[1] = truncateToWidth(chalk.green.bold("❯ ") + editorLines[1].slice(1), width);
     }
 
-    return [...outputLines, ...statusLines, ...editorLines, ...footerLines];
+    const allLines = [...outputLines, ...statusLines, ...editorLines, ...footerLines];
+    // pi-tui requires every render line to be a string; guard against
+    // components that occasionally yield non-string values (causes
+    // "line.startsWith is not a function" crash in applyLineResets).
+    for (let i = 0; i < allLines.length; i++) {
+      if (typeof allLines[i] !== "string") {
+        const src = i < outputLines.length ? "output"
+          : i < outputLines.length + statusLines.length ? "status"
+          : i < outputLines.length + statusLines.length + editorLines.length ? "editor"
+          : "footer";
+        logger.warn(`[UI] non-string render line at index ${i} (${src}): ${typeof allLines[i]} ${JSON.stringify(allLines[i])}`);
+        allLines[i] = String(allLines[i] ?? "");
+      }
+    }
+    return allLines;
   }
 
   addLog(text) {
@@ -345,21 +361,28 @@ function summarizeArgs(args) {
 }
 
 /**
+ * Run a git command asynchronously.
+ * Returns stdout trimmed, or null on failure.
+ */
+function execGitAsync(args, cwd) {
+  return new Promise((resolve) => {
+    execFile("git", args, { cwd, encoding: "utf-8", timeout: 5000 }, (err, stdout) => {
+      if (err) return resolve(null);
+      resolve((stdout || "").trim());
+    });
+  });
+}
+
+/**
  * Get git diff stats (lines added/removed) for the working directory.
  * Returns { branch, added, removed } or null if not in a git repo.
  */
-function getGitStats(cwd) {
+async function getGitStats(cwd) {
   try {
-    const branch = execSync("git rev-parse --abbrev-ref HEAD", {
-      cwd, encoding: "utf-8", timeout: 5000,
-      stdio: ["pipe", "pipe", "pipe"],
-    }).trim();
+    const branch = await execGitAsync(["rev-parse", "--abbrev-ref", "HEAD"], cwd);
+    if (!branch) return null;
 
-    // Get diff stats --numstat shows added\tremoved\tfilename
-    const diffStats = execSync("git diff --numstat", {
-      cwd, encoding: "utf-8", timeout: 5000,
-      stdio: ["pipe", "pipe", "pipe"],
-    }).trim();
+    const diffStats = await execGitAsync(["diff", "--numstat"], cwd);
 
     let added = 0;
     let removed = 0;
@@ -494,11 +517,16 @@ export function startApp(agent, initialPrompt) {
     // Refresh git stats when updating context bar (cached with TTL)
     const now = Date.now();
     if (now - gitStatsCache.timestamp > GIT_STATS_TTL) {
-      try {
-        gitStatsCache = { result: getGitStats(agent.jailDirectory || process.cwd()), timestamp: now };
-      } catch {
-        gitStatsCache = { result: null, timestamp: now };
-      }
+      gitStatsCache.timestamp = now; // Prevent concurrent fetches
+      getGitStats(agent.jailDirectory || process.cwd()).then((result) => {
+        gitStatsCache.result = result;
+        gitStats = result;
+        footerBar.invalidate();
+        tui.requestRender();
+      }).catch(() => {
+        gitStatsCache.result = null;
+        gitStats = null;
+      });
     }
     gitStats = gitStatsCache.result;
     footerBar.invalidate();
@@ -536,6 +564,7 @@ export function startApp(agent, initialPrompt) {
 
     if (trimmed === "/clear") {
       agent.reset();
+      chatView.output.clear();
       chatView.addLog(chalk.dim("    ⎿  (conversation cleared)"));
       return;
     }
@@ -855,7 +884,9 @@ Reflect on these logs and determine if there's a skill worth creating. If the lo
         chatView.addLog(chalk.dim("    ⎿  (approved all future tool calls — saved to settings)"));
         resolve({ approved: true, approveAll: true });
         approvalState = null;
-        saveSetting(agent.jailDirectory, "autoApprove", true).catch(() => {});
+        saveSetting(agent.jailDirectory, "autoApprove", true).catch((err) => {
+          chatView.addLog(chalk.dim(`    ⎿  (failed to save setting: ${err.message})`));
+        });
       }
       if (!approvalState) {
         busy = true;

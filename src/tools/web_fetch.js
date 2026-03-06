@@ -33,6 +33,46 @@ register("web_fetch", {
       return { error: "URL must start with http:// or https://" };
     }
 
+    // Block requests to private/internal IP ranges and cloud metadata endpoints
+    try {
+      const parsed = new URL(url);
+      const hostname = parsed.hostname.toLowerCase();
+
+      // Block cloud metadata endpoints
+      const blockedHosts = [
+        "169.254.169.254", "metadata.google.internal",
+        "metadata.google.com", "100.100.100.200",
+      ];
+      if (blockedHosts.includes(hostname)) {
+        return { error: "Blocked: requests to cloud metadata endpoints are not allowed" };
+      }
+
+      // Block private/reserved IP ranges
+      const ipMatch = hostname.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+      if (ipMatch) {
+        const [, a, b] = ipMatch.map(Number);
+        if (a === 10 || a === 127 || (a === 172 && b >= 16 && b <= 31) ||
+            (a === 192 && b === 168) || a === 0 || (a === 169 && b === 254)) {
+          return { error: "Blocked: requests to private/internal IP addresses are not allowed" };
+        }
+      }
+
+      // Block IPv6 localhost and private ranges
+      if (hostname === "[::1]" || hostname === "[::0]" ||
+          hostname.startsWith("[fc") || hostname.startsWith("[fd") ||
+          hostname.startsWith("[fe80")) {
+        return { error: "Blocked: requests to private/internal IPv6 addresses are not allowed" };
+      }
+
+      // Block localhost aliases
+      if (hostname === "localhost" || hostname.endsWith(".localhost") ||
+          hostname.endsWith(".local") || hostname === "[::1]") {
+        return { error: "Blocked: requests to localhost are not allowed" };
+      }
+    } catch {
+      return { error: "Invalid URL" };
+    }
+
     const response = await _client.webFetch({ url });
 
     let content = response.content || "";

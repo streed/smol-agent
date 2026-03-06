@@ -2,21 +2,21 @@ import { exec } from "node:child_process";
 import { register } from "./registry.js";
 import { resolveJailedPath } from "../path-utils.js";
 
-// Dangerous command patterns that should be blocked
+// Dangerous command patterns that should be blocked.
+// Defense-in-depth: these are a second layer behind the approval system.
 const FORBIDDEN_PATTERNS = [
-  // Remote code execution
-  /curl\s+.*\|\s*(bash|sh|zsh|ksh|fish)/i,
-  /wget\s+.*\|\s*(bash|sh|zsh|ksh|fish)/i,
+  // Remote code execution — any pipe to shell interpreter
+  /\|\s*(bash|sh|zsh|ksh|fish|dash|csh|tcsh)\b/i,
   /curl\s+.*>\s*\/(tmp|var|etc|root|home)/i,
   /wget\s+.*>\s*\/(tmp|var|etc|root|home)/i,
-  
-  // System destruction
-  /rm\s+(-[rf]+\s+|-[a-z]*r[a-z]*\s+|-[a-z]*f[a-z]*\s+)*\//i,
-  /rm\s+(-[rf]+\s+|-[a-z]*r[a-z]*\s+|-[a-z]*f[a-z]*\s+)*\*/i,
+
+  // System destruction — rm with recursive/force flags (handles backslash evasion)
+  /r\\?m\s+(-[a-z]*[rf][a-z]*\s+)*\//i,
+  /r\\?m\s+(-[a-z]*[rf][a-z]*\s+)*\*/i,
   /mkfs/i,
   /dd\s+.*of=\/dev\//i,
   />\/dev\/(sda|hda|nvme|mmcblk)/i,
-  
+
   // Writing to system directories
   />\s*\/etc\//i,
   />\s*\/root\//i,
@@ -26,23 +26,41 @@ const FORBIDDEN_PATTERNS = [
   />\s*\/usr\//i,
   />\s*\/bin\//i,
   />\s*\/sbin\//i,
-  
+
   // Privilege escalation
   /chmod\s+[0-7]*777\s+\//i,
   /chown\s+.*\s+\//i,
-  
+
   // Named pipes (can be used for exploitation)
   /mkfifo/i,
-  
-  // Shell execution from curl/wget output
-  /curl.*\|\s*sh/i,
-  /wget.*\|\s*sh/i,
-  
-  // Environment/shadow file access
-  /cat\s+\/etc\/shadow/i,
-  /cat\s+\/etc\/gshadow/i,
-  /less\s+\/etc\/shadow/i,
-  /more\s+\/etc\/shadow/i,
+
+  // Sensitive file access (any command reading shadow files)
+  /\/etc\/shadow/i,
+  /\/etc\/gshadow/i,
+
+  // Eval/exec-based bypass attempts
+  /\beval\s+["']/i,
+  /\bsource\s+/i,
+
+  // Encoded command execution
+  /\bbase64\s+(-d|--decode)/i,
+
+  // Network exfiltration tools sending data outbound
+  /\bnc\b.*</i,
+  /\bncat\b.*</i,
+  /\bnetcat\b.*</i,
+
+  // Scripting language one-liners that can bypass other checks
+  /\bpython[23]?\s+(-c|--command)\b/i,
+  /\bruby\s+(-e|--execute)\b/i,
+  /\bperl\s+(-e|--execute)\b/i,
+  /\bnode\s+(-e|--eval)\b/i,
+
+  // Prevent exfiltrating environment variables
+  /\bprintenv\b/i,
+
+  // Prevent indirect command execution via $(which ...) or `...`
+  /\$\(which\s+/i,
 ];
 
 // Maximum command length to prevent DoS

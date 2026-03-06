@@ -1,11 +1,16 @@
 import * as acp from "@agentclientprotocol/sdk";
 import { Readable, Writable } from "node:stream";
 import crypto from "node:crypto";
+import path from "node:path";
+import { createRequire } from "node:module";
 import { Agent } from "./agent.js";
 import { setAskHandler, getAskHandler } from "./tools/ask_user.js";
 import { loadSettings } from "./settings.js";
 import { logger } from "./logger.js";
 import { requiresApproval } from "./tools/registry.js";
+
+const require = createRequire(import.meta.url);
+const { version: PACKAGE_VERSION } = require("../package.json");
 
 // ── Tool kind mapping ───────────────────────────────────────────────
 
@@ -36,6 +41,18 @@ function toolKind(name) {
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
+/** Constant-time string comparison to prevent timing attacks on auth tokens. */
+function constantTimeEqual(a, b) {
+  const bufA = Buffer.from(a);
+  const bufB = Buffer.from(b);
+  if (bufA.length !== bufB.length) {
+    // Compare against self to consume constant time, then return false
+    crypto.timingSafeEqual(bufA, bufA);
+    return false;
+  }
+  return crypto.timingSafeEqual(bufA, bufB);
+}
+
 /** Wrap sessionUpdate calls so a dropped connection doesn't produce unhandled rejections. */
 function safeSessionUpdate(conn, params) {
   try {
@@ -50,6 +67,11 @@ function safeSessionUpdate(conn, params) {
 
 // Session TTL — 30 minutes of inactivity
 const SESSION_TTL_MS = 30 * 60 * 1000;
+
+// Max concurrent sessions — limited to 1 because the Agent class uses global
+// singletons (jailDirectory, searchClient, fetchClient, subAgentConfig) that
+// would cause cross-session security contamination with multiple sessions.
+const MAX_SESSIONS = 1;
 
 // ── ACP Agent implementation ────────────────────────────────────────
 
@@ -69,7 +91,7 @@ class SmolACPAgent {
       },
       agentInfo: {
         name: "smol-agent",
-        version: "1.0.0",
+        version: PACKAGE_VERSION,
       },
     };
   }
@@ -78,10 +100,23 @@ class SmolACPAgent {
     const sessionId = crypto.randomUUID();
     const cwd = params.cwd || process.cwd();
 
+    // Validate CWD to prevent jail escape via arbitrary system paths
+    const resolved = path.resolve(cwd);
+    const BLOCKED_ROOTS = ["/", "/etc", "/root", "/boot", "/bin", "/sbin", "/usr", "/lib", "/lib64", "/dev", "/proc", "/sys", "/var"];
+    if (BLOCKED_ROOTS.includes(resolved)) {
+      throw new acp.RequestError(-32602, `Blocked: '${cwd}' is not allowed as a session working directory`);
+    }
+
+    // Reject if we already have an active session — global singletons make
+    // concurrent sessions unsafe (see MAX_SESSIONS comment above).
+    if (this.sessions.size >= MAX_SESSIONS) {
+      throw new acp.RequestError(-32602, `Maximum concurrent sessions (${MAX_SESSIONS}) reached. Close the existing session before opening a new one.`);
+    }
+
     const agent = new Agent({
       host: this._host,
       model: this._model,
-      jailDirectory: cwd,
+      jailDirectory: resolved,
       coreToolsOnly: this._coreToolsOnly,
     });
 
@@ -91,22 +126,28 @@ class SmolACPAgent {
       agent._approveAll = true;
     }
 
-    // Warn if multiple concurrent sessions (global singletons may cause interference)
-    if (this.sessions.size > 0) {
-      logger.warn(`[ACP] Multiple concurrent sessions detected (${this.sessions.size + 1}). Global singletons (jailDirectory, search/fetch clients) may cause cross-session interference.`);
-    }
-
     this.sessions.set(sessionId, { agent, callCounter: 0, lastActivity: Date.now() });
     logger.info(`[ACP] session/new — id: ${sessionId}, cwd: ${cwd}, model: ${this._model || "default"}, autoApprove: ${agent._approveAll}`);
     return { sessionId };
   }
 
-  async authenticate(_params) {
+  async authenticate(params) {
+    // If a token was configured, validate it with constant-time comparison
+    if (this._authToken) {
+      const provided = params?.token || params?.credentials?.token;
+      if (!provided || !constantTimeEqual(this._authToken, provided)) {
+        throw new acp.RequestError(-32600, "Authentication failed: invalid or missing token");
+      }
+    }
     return {};
   }
 
   async prompt(params) {
     const { sessionId, prompt: contentBlocks } = params;
+
+    if (!Array.isArray(contentBlocks)) {
+      throw new acp.RequestError(-32602, "prompt.prompt must be an array of content blocks");
+    }
 
     // Sweep stale sessions
     const now = Date.now();
@@ -174,8 +215,12 @@ class SmolACPAgent {
   }
 
   async cancel(params) {
-    logger.info(`[ACP] cancel — session: ${params.sessionId.slice(0, 8)}…`);
-    const session = this.sessions.get(params.sessionId);
+    const sessionId = params?.sessionId;
+    if (!sessionId || typeof sessionId !== "string") {
+      throw new acp.RequestError(-32602, "cancel requires a valid sessionId");
+    }
+    logger.info(`[ACP] cancel — session: ${sessionId.slice(0, 8)}…`);
+    const session = this.sessions.get(sessionId);
     if (session) {
       session.agent.cancel();
     }
@@ -260,14 +305,25 @@ class SmolACPAgent {
       });
     };
 
-    const onToolResult = ({ name, result }) => {
-      // Find the matching pending call — check all entries for this tool name
+    const onToolResult = ({ name, args, result }) => {
+      // Find the matching pending call — prefer exact key match when args are
+      // available, otherwise fall back to name-prefix match.
       let callId = null;
-      for (const [key, id] of pendingToolCalls) {
-        if (key.startsWith(`${name}|`)) {
-          callId = id;
-          pendingToolCalls.delete(key);
-          break;
+      if (args !== undefined) {
+        const exactKey = `${name}|${JSON.stringify(args)}`;
+        if (pendingToolCalls.has(exactKey)) {
+          callId = pendingToolCalls.get(exactKey);
+          pendingToolCalls.delete(exactKey);
+        }
+      }
+      if (!callId) {
+        // Fallback: match first pending call for this tool name
+        for (const [key, id] of pendingToolCalls) {
+          if (key.startsWith(`${name}|`)) {
+            callId = id;
+            pendingToolCalls.delete(key);
+            break;
+          }
         }
       }
 
@@ -383,11 +439,36 @@ class SmolACPAgent {
     };
     setAskHandler(askHandler);
 
+    const onRetry = ({ attempt, maxRetries, message }) => {
+      logger.info(`[ACP] retry — attempt ${attempt}/${maxRetries}: ${message}`);
+      safeSessionUpdate(conn, {
+        sessionId,
+        update: {
+          sessionUpdate: "agent_thought_chunk",
+          content: { type: "text", text: `[Retry ${attempt}/${maxRetries}] ${message}` },
+        },
+      });
+    };
+
+    const onSubAgentProgress = (event) => {
+      const preview = typeof event === "string" ? event : JSON.stringify(event).slice(0, 120);
+      logger.debug(`[ACP] sub_agent_progress — ${preview}`);
+      safeSessionUpdate(conn, {
+        sessionId,
+        update: {
+          sessionUpdate: "agent_thought_chunk",
+          content: { type: "text", text: `[Sub-agent] ${preview}` },
+        },
+      });
+    };
+
     // Attach listeners
     agent.on("token", onToken);
     agent.on("thinking", onThinking);
     agent.on("tool_call", onToolCall);
     agent.on("tool_result", onToolResult);
+    agent.on("retry", onRetry);
+    agent.on("sub_agent_progress", onSubAgentProgress);
 
     // Return cleanup function
     return () => {
@@ -395,6 +476,8 @@ class SmolACPAgent {
       agent.off("thinking", onThinking);
       agent.off("tool_call", onToolCall);
       agent.off("tool_result", onToolResult);
+      agent.off("retry", onRetry);
+      agent.off("sub_agent_progress", onSubAgentProgress);
       // Note: _approveAll is intentionally NOT reverted — "Allow always"
       // should persist across prompt turns within the same session.
       agent.setApprovalHandler(null);
@@ -411,23 +494,33 @@ export function startACPServer(options = {}) {
   const input = Readable.toWeb(process.stdin);
   const stream = acp.ndJsonStream(output, input);
 
+  let acpAgent = null;
   const connection = new acp.AgentSideConnection((conn) => {
-    const agent = new SmolACPAgent(conn);
+    acpAgent = new SmolACPAgent(conn);
     // Pass config through to agent creation
-    agent._host = options.host;
-    agent._model = options.model;
-    agent._contextSize = options.contextSize;
-    agent._coreToolsOnly = options.coreToolsOnly;
-    agent._autoApprove = options.autoApprove;
-    return agent;
+    acpAgent._host = options.host;
+    acpAgent._model = options.model;
+    acpAgent._contextSize = options.contextSize;
+    acpAgent._coreToolsOnly = options.coreToolsOnly;
+    acpAgent._autoApprove = options.autoApprove;
+    acpAgent._authToken = options.authToken || process.env.SMOL_AGENT_AUTH_TOKEN || null;
+    return acpAgent;
   }, stream);
 
   // Log to file (stdout is reserved for JSON-RPC)
   logger.info(`[ACP] server started — model: ${options.model || "default"}, host: ${options.host || "default"}, coreToolsOnly: ${options.coreToolsOnly}, autoApprove: ${options.autoApprove}`);
 
-  // Keep process alive until connection closes
+  // When the connection closes, cancel all active sessions and clean up
   connection.closed.then(() => {
-    logger.info("ACP connection closed");
+    logger.info("[ACP] connection closed — cancelling active sessions");
+    if (acpAgent) {
+      for (const [id, session] of acpAgent.sessions) {
+        logger.info(`[ACP] cancelling session ${id.slice(0, 8)}… on connection close`);
+        session.agent.cancel();
+        session.agent.reset();
+      }
+      acpAgent.sessions.clear();
+    }
     process.exit(0);
   });
 

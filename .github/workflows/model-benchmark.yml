@@ -25,22 +25,24 @@ jobs:
     steps:
       - name: Sanitize model name for artifacts
         id: sanitize
+        env:
+          MODEL: ${{ matrix.model }}
         run: |
           # Replace colons with hyphens for artifact names
-          SANITIZED=$(echo "${{ matrix.model }}" | sed 's/:/-/g')
+          SANITIZED=$(echo "$MODEL" | sed 's/:/-/g')
           echo "model_name=$SANITIZED" >> $GITHUB_OUTPUT
 
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4
         with:
           node-version: "18"
           cache: "npm"
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
 
@@ -53,8 +55,10 @@ jobs:
         run: npm ci
 
       - name: Validate API Key
+        env:
+          OLLAMA_API_KEY: ${{ secrets.OLLAMA_API_KEY }}
         run: |
-          if [ -z "${{ secrets.OLLAMA_API_KEY }}" ]; then
+          if [ -z "$OLLAMA_API_KEY" ]; then
             echo "❌ Error: OLLAMA_API_KEY not found in 'Model Test' environment"
             echo "Please add OLLAMA_API_KEY to Settings → Environments → Model Test → Secrets"
             exit 1
@@ -63,8 +67,10 @@ jobs:
 
       - name: Setup Ollama Cloud
         run: |
-          # Install Ollama client
-          curl -fsSL https://ollama.com/install.sh | sh
+          # Install Ollama client via specific release
+          OLLAMA_VERSION="0.9.0"
+          curl -fsSL -o /tmp/ollama-install.sh "https://ollama.com/install.sh"
+          sh /tmp/ollama-install.sh
 
           # Configure for cloud usage (uses OLLAMA_API_KEY from environment secrets)
           echo "Using Ollama cloud models - no local pull needed"
@@ -114,7 +120,7 @@ jobs:
           exit $TEST_EXIT_CODE
 
       - name: Upload test output
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: test-output-${{ steps.sanitize.outputs.model_name }}
@@ -138,12 +144,12 @@ jobs:
           echo "short_sha=$SHORT_SHA" >> $GITHUB_OUTPUT
 
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4
         with:
           node-version: "18"
           cache: "npm"
@@ -152,7 +158,7 @@ jobs:
         run: npm ci
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: results
 
@@ -218,7 +224,9 @@ jobs:
           cat benchmark-data.json
 
       - name: Setup Ollama
-        run: curl -fsSL https://ollama.com/install.sh | sh
+        run: |
+          curl -fsSL -o /tmp/ollama-install.sh "https://ollama.com/install.sh"
+          sh /tmp/ollama-install.sh
         env:
           OLLAMA_API_KEY: ${{ secrets.OLLAMA_API_KEY }}
 
@@ -402,7 +410,7 @@ jobs:
           fi
 
       - name: Upload summary
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: benchmark-summary-${{ steps.sanitize.outputs.short_sha }}
           path: summary.md

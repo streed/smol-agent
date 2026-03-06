@@ -1,4 +1,5 @@
-import fs from "node:fs";
+import fs from "node:fs/promises";
+import { openSync, readSync, closeSync } from "node:fs";
 import path from "node:path";
 import { logger } from "./logger.js";
 
@@ -79,20 +80,20 @@ export async function prehydrate(userMessage, cwd, options = {}) {
     }
 
     try {
-      const stat = fs.statSync(resolved);
+      const stat = await fs.stat(resolved);
 
       if (stat.isFile() && stat.size <= maxBytesPerFile) {
-        // Quick binary check
+        // Quick binary check (sync — small read, not worth async overhead)
         const probe = Buffer.alloc(Math.min(512, stat.size));
-        const fd = fs.openSync(resolved, "r");
+        const fd = openSync(resolved, "r");
         try {
-          fs.readSync(fd, probe, 0, probe.length, 0);
+          readSync(fd, probe, 0, probe.length, 0);
         } finally {
-          fs.closeSync(fd);
+          closeSync(fd);
         }
         if (probe.includes(0)) continue; // skip binary
 
-        const content = fs.readFileSync(resolved, "utf-8");
+        const content = await fs.readFile(resolved, "utf-8");
         const lines = content.split("\n");
         const numbered = lines
           .map((line, i) => `${i + 1}\t${line}`)
@@ -102,7 +103,7 @@ export async function prehydrate(userMessage, cwd, options = {}) {
         logger.debug(`Pre-hydrated: ${ref} (${lines.length} lines)`);
       } else if (stat.isDirectory()) {
         // List directory contents (shallow)
-        const entries = fs.readdirSync(resolved, { withFileTypes: true });
+        const entries = await fs.readdir(resolved, { withFileTypes: true });
         const listing = entries
           .slice(0, 30)
           .map((e) => (e.isDirectory() ? `${e.name}/` : e.name))

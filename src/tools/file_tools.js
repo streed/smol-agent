@@ -102,6 +102,21 @@ register("write_file", {
     },
   },
   async execute({ filePath, content }, { cwd = process.cwd() } = {}) {
+    // Block writes to sensitive paths within the jail
+    const PROTECTED_PATTERNS = [
+      /^\.git\/hooks\//,
+      /^\.git\/config$/,
+      /^\.smol-agent\/settings\.json$/,
+      /^\.env$/,
+      /^\.env\..+/,
+    ];
+    const normalized = filePath.replace(/\\/g, "/").replace(/^\.\//, "");
+    for (const pattern of PROTECTED_PATTERNS) {
+      if (pattern.test(normalized)) {
+        return { error: `Blocked: writing to '${filePath}' is not allowed for security reasons` };
+      }
+    }
+
     const resolved = resolveJailedPath(cwd, filePath);
 
     // Ensure parent directories exist

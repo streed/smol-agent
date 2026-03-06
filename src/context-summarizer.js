@@ -55,12 +55,27 @@ Conversation to summarize:
 ${content}`;
 
   try {
-    // Use a smaller/faster model for summarization if available
-    const summarizationModel = model.includes('32b') || model.includes('70b') || model.includes('72b')
-      ? model.replace(/32b|70b|72b/, '7b')  // Use smaller model for summarization
-      : model;
-
     const host = ollamaHost || process.env.OLLAMA_HOST || 'http://127.0.0.1:11434';
+
+    // Try a smaller/faster model for summarization if available
+    let summarizationModel = model;
+    if (model.includes('32b') || model.includes('70b') || model.includes('72b')) {
+      const candidate = model.replace(/32b|70b|72b/, '7b');
+      try {
+        const checkResp = await fetch(`${host}/api/show`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: candidate }),
+        });
+        if (checkResp.ok) {
+          summarizationModel = candidate;
+          logger.debug(`Using smaller model for summarization: ${candidate}`);
+        }
+      } catch {
+        // Model check failed, use original model
+      }
+    }
+
     const response = await fetch(`${host}/api/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -140,6 +155,8 @@ function createSimpleSummary(messages) {
  * Decide which messages to summarize based on token budget.
  * Returns { toSummarize, toKeep } where toKeep are the most recent messages.
  */
+const MIN_KEEP_MESSAGES = 6;
+
 export function selectMessagesToSummarize(messages, targetTokens, estimateMessageTokensFn) {
   // Always keep system message
   const systemMsg = messages[0]?.role === 'system' ? messages[0] : null;
@@ -156,6 +173,12 @@ export function selectMessagesToSummarize(messages, targetTokens, estimateMessag
       break;
     }
     tokenCount += msgTokens;
+  }
+
+  // Ensure we always keep at least MIN_KEEP_MESSAGES recent messages
+  const maxSplitIndex = Math.max(0, conversationMsgs.length - MIN_KEEP_MESSAGES);
+  if (splitIndex > maxSplitIndex) {
+    splitIndex = maxSplitIndex;
   }
 
   // Adjust split to end at an assistant message (for conversation continuity)

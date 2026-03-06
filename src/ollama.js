@@ -23,13 +23,13 @@ class TokenBucket {
     this.lastRefill = Date.now();
   }
 
-  async acquire(tokens = 1) {
+  acquire(tokens = 1) {
     this.refill();
     if (this.tokens >= tokens) {
       this.tokens -= tokens;
-      return true;
+      return { ok: true, waitMs: 0 };
     }
-    return ((tokens - this.tokens) / this.refillRate) * 1000;
+    return { ok: false, waitMs: ((tokens - this.tokens) / this.refillRate) * 1000 };
   }
 
   refill() {
@@ -66,15 +66,15 @@ async function waitForRateLimit() {
   }
 
   while (true) {
-    const wait = await buckets.secondBucket.acquire(1);
-    if (wait === true) break;
-    await new Promise((r) => setTimeout(r, wait));
+    const result = buckets.secondBucket.acquire(1);
+    if (result.ok) break;
+    await new Promise((r) => setTimeout(r, result.waitMs));
   }
 
   while (true) {
-    const wait = await buckets.minuteBucket.acquire(1);
-    if (wait === true) break;
-    await new Promise((r) => setTimeout(r, wait));
+    const result = buckets.minuteBucket.acquire(1);
+    if (result.ok) break;
+    await new Promise((r) => setTimeout(r, result.waitMs));
   }
 }
 

@@ -4,7 +4,7 @@ import { register } from "./registry.js";
 const MAX_BUFFER = 100 * 1024;
 const TIMEOUT_MS = 30_000;
 
-const BLOCKED_COMMANDS = new Set(["push"]);
+const BLOCKED_COMMANDS = new Set(["push", "filter-branch"]);
 const BLOCKED_FLAGS = new Set(["--force", "-f", "--force-with-lease", "-D", "--delete"]);
 
 const DESTRUCTIVE_SUBCOMMANDS = {
@@ -65,6 +65,11 @@ register("git", {
       if (BLOCKED_FLAGS.has(arg)) {
         return { error: `Blocked: '${arg}' flag is not allowed` };
       }
+    }
+
+    // Block git config alias modifications (can bypass command blocks)
+    if (subcommand === "config" && args.some(a => a.startsWith("alias."))) {
+      return { error: "Blocked: modifying git aliases is not allowed" };
     }
 
     if (DESTRUCTIVE_SUBCOMMANDS[subcommand]) {
