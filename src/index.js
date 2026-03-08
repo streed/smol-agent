@@ -108,6 +108,8 @@ function runSelfUpdate() {
 const args = process.argv.slice(2);
 let host = undefined;
 let model = undefined;
+let provider = undefined;       // --provider <name> (ollama, openai, anthropic, grok)
+let apiKey = undefined;         // --api-key <key>
 
 let promptText = undefined;
 let jailDirectory = process.cwd();
@@ -125,6 +127,10 @@ for (let i = 0; i < args.length; i++) {
     host = args[++i];
   } else if ((a === "--model" || a === "-m") && args[i + 1]) {
     model = args[++i];
+  } else if ((a === "--provider" || a === "-p") && args[i + 1]) {
+    provider = args[++i];
+  } else if (a === "--api-key" && args[i + 1]) {
+    apiKey = args[++i];
 
   } else if ((a === "--directory" || a === "-d") && args[i + 1]) {
     jailDirectory = path.resolve(args[++i]);
@@ -158,14 +164,16 @@ for (let i = 0; i < args.length; i++) {
 }
 
 function printUsage() {
-  console.log(`smol-agent — a small coding agent powered by Ollama
+  console.log(`smol-agent — a small coding agent powered by local and cloud LLMs
 
 Usage:
   smol-agent [options] [prompt]
 
 Options:
-  -m, --model <name>        Ollama model to use (default: qwen3.5:27b)
-  -H, --host <url>          Ollama server URL (default: http://127.0.0.1:11434)
+  -m, --model <name>        Model to use (default depends on provider)
+  -p, --provider <name>     LLM provider: ollama, openai, anthropic, grok (default: ollama)
+  -H, --host <url>          Provider host/base URL (default: provider-specific)
+      --api-key <key>       API key for cloud providers (or use env vars)
 
   -d, --directory <path>    Set working directory and jail boundary (default: cwd)
       --all-tools           Expose all tools (auto-detected for 30B+ models)
@@ -181,6 +189,12 @@ Session Management:
       --list-sessions       List all saved sessions
       --sessions            Alias for --list-sessions
 
+Providers:
+  ollama (default)   Local LLMs via Ollama (no API key needed)
+  openai             OpenAI API (set OPENAI_API_KEY or use --api-key)
+  anthropic          Anthropic Claude API (set ANTHROPIC_API_KEY or use --api-key)
+  grok               xAI Grok API (set XAI_API_KEY or use --api-key)
+
 Interactive Commands:
   /clear             Clear conversation history
   /sessions          List saved sessions
@@ -195,15 +209,21 @@ Interactive Commands:
 Examples:
   smol-agent "add error handling to src/index.js"
   smol-agent -m codellama "refactor the auth module"
+  smol-agent -p openai -m gpt-4o "explain this codebase"
+  smol-agent -p anthropic "refactor the auth module"
+  smol-agent -p grok -m grok-3 "add tests"
   smol-agent -d ./my-project "add a new feature"
   smol-agent                                         # interactive mode`);
 }
 
 // ── Boot ─────────────────────────────────────────────────────────────
 
-// Auto-detect: expose all tools for 30B+ models, core-only for smaller ones.
-function shouldUseCoreOnly(modelName) {
+// Auto-detect: expose all tools for 30B+ models or cloud providers, core-only for smaller local models.
+function shouldUseCoreOnly(modelName, providerName) {
   if (allTools === true) return false;
+  // Cloud providers (openai, anthropic, grok) use large models — always expose all tools
+  const cloudProviders = new Set(["openai", "anthropic", "grok"]);
+  if (cloudProviders.has((providerName || "").toLowerCase())) return false;
   if (!modelName) return true; // default to core-only
   // Extract parameter count from model name (e.g. "qwen2.5-coder:32b" → 32)
   const sizeMatch = modelName.match(/(\d+)[bB]/);
@@ -214,7 +234,7 @@ function shouldUseCoreOnly(modelName) {
   return true; // unknown size → be conservative
 }
 
-const coreToolsOnly = shouldUseCoreOnly(model);
+const coreToolsOnly = shouldUseCoreOnly(model, provider);
 
 // ── List sessions (non-interactive) ───────────────────────────────────
 if (listSessionsFlag) {
@@ -243,13 +263,14 @@ if (acpMode) {
   startACPServer({
     host,
     model,
-
+    provider,
+    apiKey,
     coreToolsOnly,
     autoApprove,
   });
 } else {
   // ── TUI mode ────────────────────────────────────────────────────────
-  const agent = new Agent({ host, model, jailDirectory, coreToolsOnly });
+  const agent = new Agent({ host, model, provider, apiKey, jailDirectory, coreToolsOnly });
 
   // Load persisted settings, CLI flags override
   const settings = await loadSettings(jailDirectory);

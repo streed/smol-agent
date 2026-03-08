@@ -143,12 +143,21 @@ export class ContextManager {
     this.lastPromptTokens = 0; // Actual count from API when available
     this.lastCompletionTokens = 0;
     this._messageCountAtLastUpdate = 0; // Track staleness of lastPromptTokens
-    this.ollamaHost = null; // Host URL for LLM-based summarization
-    this.llmModel = null;
+    this.llmProvider = null; // LLM provider for intelligent summarization
+    this.ollamaHost = null; // Legacy: Host URL for LLM-based summarization
+    this.llmModel = null;  // Legacy: Model name
   }
 
   /**
-   * Set the LLM client for intelligent summarization
+   * Set the LLM provider for intelligent summarization.
+   * @param {import('./providers/base.js').BaseLLMProvider} provider
+   */
+  setLLMProvider(provider) {
+    this.llmProvider = provider;
+  }
+
+  /**
+   * @deprecated Use setLLMProvider() instead. Kept for backward compatibility.
    */
   setLLMClient(host, model) {
     this.ollamaHost = host;
@@ -497,10 +506,14 @@ export class ContextManager {
     
     let summaryContent;
     
-    // Try LLM-based summarization if client is available
-    if (this.ollamaHost && this.llmModel) {
+    // Try LLM-based summarization if provider is available
+    if (this.llmProvider || (this.ollamaHost && this.llmModel)) {
       try {
-        summaryContent = await summarizeMessagesWithLLM(toSummarize, this.ollamaHost, this.llmModel);
+        summaryContent = await summarizeMessagesWithLLM(
+          toSummarize,
+          this.llmProvider || this.ollamaHost,
+          this.llmModel,
+        );
         logger.info(`LLM summarized ${toSummarize.length} old messages`);
       } catch (error) {
         logger.warn(`LLM summarization failed, using fallback: ${error.message}`);
