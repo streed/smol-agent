@@ -724,7 +724,7 @@ Reflect on these logs and determine if there's a skill worth creating. If the lo
       } else {
         chatView.addLog(chalk.dim("    ⎿  Available checkpoints:"));
         for (const cp of checkpoints) {
-          chatView.addLog(chalk.dim(`        [${cp.index}] ${cp.message}`));
+          chatView.addLog(chalk.dim(`        [${cp.hash ? cp.hash.slice(0, 8) : "?"}] ${cp.message}`));
         }
         chatView.addLog(chalk.dim("        Use /undo to rollback to the most recent checkpoint."));
       }

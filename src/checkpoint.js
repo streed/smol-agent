@@ -2,30 +2,73 @@
  * Git Checkpoint System — inspired by Kilocode and OpenCode.
  *
  * Creates lightweight snapshots before agent runs, allowing easy rollback
- * of all changes made during a session. Uses git stash for simplicity
- * and compatibility (no git internals like write-tree/read-tree).
+ * of all changes made during a session. Uses a secondary git repo inside
+ * .smol-agent/checkpoints/ to avoid polluting the main repo's stash or
+ * history.
  *
  * Design:
- *   - Before each agent run, capture a checkpoint of the working tree
- *   - Track which files were modified during the run
- *   - Provide /undo to revert all changes from the last run
- *   - Checkpoints are stored as git stash entries with a marker message
+ *   - A shadow git repo at .smol-agent/checkpoints/ mirrors the working tree
+ *   - Before each agent run, copy tracked + untracked files into the shadow
+ *     repo and commit them as a checkpoint
+ *   - On /undo, restore files from the shadow repo's commit back to the
+ *     working tree
+ *   - Completely isolated from the user's main git workflow
  *
  * Safety:
- *   - Only operates within git repositories
- *   - Uses `git stash` (standard, safe operation)
+ *   - Never touches the main repo's git state (no stash, no staging changes)
+ *   - Only copies files; does not modify .git/ in the main repo
  *   - Preserves untracked files in checkpoints
  *   - Warns before destructive rollback
  */
 
 import { execFileSync } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
 import { logger } from "./logger.js";
 
 const TIMEOUT_MS = 15_000;
+const CHECKPOINT_DIR = ".smol-agent/checkpoints";
 const CHECKPOINT_PREFIX = "smol-agent-checkpoint:";
 
 /**
- * Check if the directory is inside a git repository.
+ * Get the path to the shadow checkpoint repo.
+ */
+function checkpointRepoPath(cwd) {
+  return path.join(cwd, CHECKPOINT_DIR);
+}
+
+/**
+ * Initialize the shadow checkpoint repo if it doesn't exist.
+ */
+function ensureCheckpointRepo(cwd) {
+  const repoPath = checkpointRepoPath(cwd);
+
+  if (!fs.existsSync(path.join(repoPath, ".git"))) {
+    fs.mkdirSync(repoPath, { recursive: true });
+    execFileSync("git", ["init"], {
+      cwd: repoPath, encoding: "utf-8", timeout: TIMEOUT_MS,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    execFileSync("git", ["config", "user.email", "smol-agent@checkpoint"], {
+      cwd: repoPath, encoding: "utf-8", timeout: TIMEOUT_MS,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    execFileSync("git", ["config", "user.name", "smol-agent"], {
+      cwd: repoPath, encoding: "utf-8", timeout: TIMEOUT_MS,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    execFileSync("git", ["config", "commit.gpgsign", "false"], {
+      cwd: repoPath, encoding: "utf-8", timeout: TIMEOUT_MS,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    logger.debug("Checkpoint repo initialized at " + repoPath);
+  }
+
+  return repoPath;
+}
+
+/**
+ * Check if the main directory is inside a git repository.
  */
 function isGitRepo(cwd) {
   try {
@@ -40,7 +83,34 @@ function isGitRepo(cwd) {
 }
 
 /**
- * Get a list of currently modified/untracked files.
+ * Get list of files to checkpoint (tracked + untracked, excluding .smol-agent/).
+ * Uses git ls-files for tracked and git ls-files --others for untracked.
+ */
+function getFilesToCheckpoint(cwd) {
+  try {
+    // Tracked files (including modified)
+    const tracked = execFileSync(
+      "git", ["ls-files", "--full-name"],
+      { cwd, encoding: "utf-8", timeout: TIMEOUT_MS, stdio: ["pipe", "pipe", "pipe"] }
+    ).trim().split("\n").filter(Boolean);
+
+    // Untracked files (excluding ignored)
+    const untracked = execFileSync(
+      "git", ["ls-files", "--others", "--exclude-standard", "--full-name"],
+      { cwd, encoding: "utf-8", timeout: TIMEOUT_MS, stdio: ["pipe", "pipe", "pipe"] }
+    ).trim().split("\n").filter(Boolean);
+
+    const all = [...new Set([...tracked, ...untracked])];
+
+    // Exclude .smol-agent/ directory
+    return all.filter(f => !f.startsWith(".smol-agent/") && !f.startsWith(".smol-agent\\"));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Get a list of currently modified/untracked files in the main repo.
  */
 function getWorkingTreeChanges(cwd) {
   try {
@@ -55,9 +125,50 @@ function getWorkingTreeChanges(cwd) {
 }
 
 /**
+ * Sync files from the main working tree to the shadow checkpoint repo.
+ */
+function syncToCheckpointRepo(cwd, repoPath) {
+  const files = getFilesToCheckpoint(cwd);
+
+  // Clean the checkpoint repo (except .git)
+  const entries = fs.readdirSync(repoPath);
+  for (const entry of entries) {
+    if (entry === ".git") continue;
+    const fullPath = path.join(repoPath, entry);
+    fs.rmSync(fullPath, { recursive: true, force: true });
+  }
+
+  // Copy files from main working tree to checkpoint repo
+  let copied = 0;
+  for (const relFile of files) {
+    const src = path.join(cwd, relFile);
+    const dest = path.join(repoPath, relFile);
+
+    try {
+      // Skip if source doesn't exist (deleted file in status)
+      if (!fs.existsSync(src)) continue;
+
+      const stat = fs.statSync(src);
+      if (stat.isDirectory()) continue;
+
+      // Skip large files (> 1MB)
+      if (stat.size > 1_000_000) continue;
+
+      fs.mkdirSync(path.dirname(dest), { recursive: true });
+      fs.copyFileSync(src, dest);
+      copied++;
+    } catch {
+      // Skip files that can't be copied (binary, permission issues, etc.)
+    }
+  }
+
+  return copied;
+}
+
+/**
  * Create a checkpoint of the current working tree state.
  *
- * @param {string} cwd - Working directory
+ * @param {string} cwd - Working directory (must be a git repo)
  * @param {string} [label] - Optional label for the checkpoint
  * @returns {{ created: boolean, message?: string, error?: string }}
  */
@@ -72,30 +183,40 @@ export function createCheckpoint(cwd, label = "") {
     return { created: false, message: "No changes to checkpoint (clean working tree)" };
   }
 
-  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const stashMsg = `${CHECKPOINT_PREFIX}${timestamp}${label ? " " + label : ""}`;
-
   try {
-    // Stage everything first so stash captures all changes
+    const repoPath = ensureCheckpointRepo(cwd);
+    const copied = syncToCheckpointRepo(cwd, repoPath);
+
+    if (copied === 0) {
+      return { created: false, message: "No files to checkpoint" };
+    }
+
+    // Stage everything in the checkpoint repo
     execFileSync("git", ["add", "--all"], {
-      cwd, encoding: "utf-8", timeout: TIMEOUT_MS,
+      cwd: repoPath, encoding: "utf-8", timeout: TIMEOUT_MS,
       stdio: ["pipe", "pipe", "pipe"],
     });
 
-    // Create stash entry
-    execFileSync("git", ["stash", "push", "-m", stashMsg], {
-      cwd, encoding: "utf-8", timeout: TIMEOUT_MS,
+    // Check if there's anything to commit
+    const status = execFileSync("git", ["status", "--porcelain"], {
+      cwd: repoPath, encoding: "utf-8", timeout: TIMEOUT_MS,
+      stdio: ["pipe", "pipe", "pipe"],
+    }).trim();
+
+    if (!status) {
+      return { created: false, message: "No changes to checkpoint (identical to last checkpoint)" };
+    }
+
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const commitMsg = `${CHECKPOINT_PREFIX}${timestamp}${label ? " " + label : ""}`;
+
+    execFileSync("git", ["commit", "-m", commitMsg], {
+      cwd: repoPath, encoding: "utf-8", timeout: TIMEOUT_MS,
       stdio: ["pipe", "pipe", "pipe"],
     });
 
-    // Immediately restore the working tree (stash entry remains in the list)
-    execFileSync("git", ["stash", "apply"], {
-      cwd, encoding: "utf-8", timeout: TIMEOUT_MS,
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-
-    logger.info(`Checkpoint created: ${stashMsg} (${changes.length} files)`);
-    return { created: true, message: stashMsg, files: changes.length };
+    logger.info(`Checkpoint created: ${commitMsg} (${changes.length} changed files, ${copied} total files)`);
+    return { created: true, message: commitMsg, files: changes.length };
   } catch (err) {
     logger.warn(`Checkpoint creation failed: ${err.message}`);
     return { created: false, error: err.message };
@@ -107,16 +228,17 @@ export function createCheckpoint(cwd, label = "") {
  *
  * @param {string} cwd - Working directory
  * @param {number} [limit=10] - Max checkpoints to return
- * @returns {Array<{ index: number, message: string, date: string }>}
+ * @returns {Array<{ hash: string, message: string }>}
  */
 export function listCheckpoints(cwd, limit = 10) {
-  if (!isGitRepo(cwd)) return [];
+  const repoPath = checkpointRepoPath(cwd);
+  if (!fs.existsSync(path.join(repoPath, ".git"))) return [];
 
   try {
-    const output = execFileSync("git", ["stash", "list"], {
-      cwd, encoding: "utf-8", timeout: TIMEOUT_MS,
-      stdio: ["pipe", "pipe", "pipe"],
-    });
+    const output = execFileSync(
+      "git", ["log", "--oneline", "--format=%H %s", `-${limit * 2}`],
+      { cwd: repoPath, encoding: "utf-8", timeout: TIMEOUT_MS, stdio: ["pipe", "pipe", "pipe"] }
+    );
 
     if (!output.trim()) return [];
 
@@ -124,28 +246,28 @@ export function listCheckpoints(cwd, limit = 10) {
       .filter(line => line.includes(CHECKPOINT_PREFIX))
       .slice(0, limit)
       .map(line => {
-        const match = line.match(/^stash@\{(\d+)\}: .*?: (.+)$/);
-        if (!match) return null;
-        return { index: parseInt(match[1], 10), message: match[2] };
-      })
-      .filter(Boolean);
+        const spaceIdx = line.indexOf(" ");
+        const hash = line.slice(0, spaceIdx);
+        const message = line.slice(spaceIdx + 1);
+        return { hash, message };
+      });
   } catch {
     return [];
   }
 }
 
 /**
- * Rollback to a checkpoint, discarding all changes made since.
+ * Rollback to a checkpoint, restoring the working tree to that state.
  *
  * This is a DESTRUCTIVE operation — it will:
  *   1. Discard all current working tree changes
- *   2. Apply the checkpoint's saved state
+ *   2. Restore files from the checkpoint commit
  *
  * @param {string} cwd - Working directory
- * @param {number} [stashIndex] - Stash index to restore (default: most recent checkpoint)
+ * @param {string} [commitHash] - Specific commit hash to restore (default: most recent checkpoint)
  * @returns {{ restored: boolean, message?: string, error?: string }}
  */
-export function rollbackToCheckpoint(cwd, stashIndex = null) {
+export function rollbackToCheckpoint(cwd, commitHash = null) {
   if (!isGitRepo(cwd)) {
     return { restored: false, error: "Not a git repository" };
   }
@@ -155,31 +277,74 @@ export function rollbackToCheckpoint(cwd, stashIndex = null) {
     return { restored: false, error: "No checkpoints found" };
   }
 
-  const target = stashIndex !== null
-    ? stashIndex
-    : checkpoints[0].index;
+  const target = commitHash || checkpoints[0].hash;
+  const repoPath = checkpointRepoPath(cwd);
 
   try {
-    // First, discard current working tree changes
+    // Get the list of files from the checkpoint commit
+    const filesInCheckpoint = execFileSync(
+      "git", ["ls-tree", "-r", "--name-only", target],
+      { cwd: repoPath, encoding: "utf-8", timeout: TIMEOUT_MS, stdio: ["pipe", "pipe", "pipe"] }
+    ).trim().split("\n").filter(Boolean);
+
+    // First, revert tracked files in the main repo to HEAD
     execFileSync("git", ["checkout", "--", "."], {
       cwd, encoding: "utf-8", timeout: TIMEOUT_MS,
       stdio: ["pipe", "pipe", "pipe"],
     });
 
-    // Remove any untracked files that were added
-    execFileSync("git", ["clean", "-fd"], {
+    // Remove untracked files added since checkpoint (but preserve .smol-agent/)
+    execFileSync("git", ["clean", "-fd", "-e", ".smol-agent/"], {
       cwd, encoding: "utf-8", timeout: TIMEOUT_MS,
       stdio: ["pipe", "pipe", "pipe"],
     });
 
-    // Apply the stashed checkpoint
-    execFileSync("git", ["stash", "apply", `stash@{${target}}`], {
-      cwd, encoding: "utf-8", timeout: TIMEOUT_MS,
+    // Checkout the checkpoint commit in the shadow repo (detached HEAD)
+    execFileSync("git", ["checkout", target], {
+      cwd: repoPath, encoding: "utf-8", timeout: TIMEOUT_MS,
       stdio: ["pipe", "pipe", "pipe"],
     });
 
-    logger.info(`Rolled back to checkpoint stash@{${target}}`);
-    return { restored: true, message: `Restored to checkpoint: ${checkpoints[0]?.message || `stash@{${target}}`}` };
+    // Copy files back from checkpoint repo to working tree
+    let restored = 0;
+    for (const relFile of filesInCheckpoint) {
+      const src = path.join(repoPath, relFile);
+      const dest = path.join(cwd, relFile);
+
+      try {
+        if (!fs.existsSync(src)) continue;
+        fs.mkdirSync(path.dirname(dest), { recursive: true });
+        fs.copyFileSync(src, dest);
+        restored++;
+      } catch {
+        // Skip files that can't be restored
+      }
+    }
+
+    // Return shadow repo to the latest branch
+    try {
+      execFileSync("git", ["checkout", "-"], {
+        cwd: repoPath, encoding: "utf-8", timeout: TIMEOUT_MS,
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+    } catch {
+      // May fail if detached HEAD scenario, try master/main
+      try {
+        execFileSync("git", ["checkout", "master"], {
+          cwd: repoPath, encoding: "utf-8", timeout: TIMEOUT_MS,
+          stdio: ["pipe", "pipe", "pipe"],
+        });
+      } catch {
+        // Best effort
+      }
+    }
+
+    logger.info(`Rolled back to checkpoint ${target.slice(0, 8)} (${restored} files restored)`);
+    return {
+      restored: true,
+      message: `Restored to checkpoint: ${checkpoints[0]?.message || target.slice(0, 8)}`,
+      filesRestored: restored,
+    };
   } catch (err) {
     logger.warn(`Rollback failed: ${err.message}`);
     return { restored: false, error: err.message };
@@ -187,27 +352,21 @@ export function rollbackToCheckpoint(cwd, stashIndex = null) {
 }
 
 /**
- * Clean up old checkpoints (keep only the most recent N).
+ * Clean up old checkpoints. Runs git gc to compact the shadow repo.
  *
  * @param {string} cwd - Working directory
- * @param {number} [keep=3] - Number of checkpoints to keep
+ * @param {number} [keep=5] - Number of checkpoints to keep (unused, kept for API compat)
  */
-export function cleanupCheckpoints(cwd, keep = 3) {
-  const checkpoints = listCheckpoints(cwd, 100);
-  if (checkpoints.length <= keep) return;
+export function cleanupCheckpoints(cwd, keep = 5) {
+  const repoPath = checkpointRepoPath(cwd);
+  if (!fs.existsSync(path.join(repoPath, ".git"))) return;
 
-  // Drop oldest checkpoints (higher indices = older in stash)
-  const toDrop = checkpoints.slice(keep);
-  // Drop from highest index first to avoid index shifting
-  for (const cp of toDrop.reverse()) {
-    try {
-      execFileSync("git", ["stash", "drop", `stash@{${cp.index}}`], {
-        cwd, encoding: "utf-8", timeout: TIMEOUT_MS,
-        stdio: ["pipe", "pipe", "pipe"],
-      });
-      logger.debug(`Cleaned up old checkpoint: stash@{${cp.index}}`);
-    } catch {
-      // Ignore errors — index may have shifted
-    }
+  try {
+    execFileSync("git", ["gc", "--quiet"], {
+      cwd: repoPath, encoding: "utf-8", timeout: TIMEOUT_MS,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+  } catch {
+    // gc is best-effort
   }
 }

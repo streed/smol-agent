@@ -47,13 +47,33 @@ describe("checkpoint system", () => {
     expect(fs.readFileSync(path.join(tmpDir, "test.js"), "utf-8")).toBe("const x = 1;");
   });
 
-  it("listCheckpoints returns created checkpoints", () => {
+  it("createCheckpoint uses shadow repo in .smol-agent/checkpoints", () => {
+    fs.writeFileSync(path.join(tmpDir, "test.js"), "const x = 1;");
+    createCheckpoint(tmpDir);
+    // Shadow repo should exist
+    const shadowGit = path.join(tmpDir, ".smol-agent", "checkpoints", ".git");
+    expect(fs.existsSync(shadowGit)).toBe(true);
+  });
+
+  it("createCheckpoint does not touch main repo stash", () => {
+    fs.writeFileSync(path.join(tmpDir, "test.js"), "const x = 1;");
+    createCheckpoint(tmpDir);
+    // Main repo stash should be empty
+    const stash = execFileSync("git", ["stash", "list"], {
+      cwd: tmpDir, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"],
+    }).trim();
+    expect(stash).toBe("");
+  });
+
+  it("listCheckpoints returns created checkpoints with hash", () => {
     fs.writeFileSync(path.join(tmpDir, "test.js"), "const x = 1;");
     createCheckpoint(tmpDir, "first");
 
     const checkpoints = listCheckpoints(tmpDir);
     expect(checkpoints.length).toBeGreaterThan(0);
     expect(checkpoints[0].message).toContain("first");
+    expect(checkpoints[0].hash).toBeDefined();
+    expect(checkpoints[0].hash.length).toBe(40); // full SHA
   });
 
   it("rollbackToCheckpoint restores previous state", () => {
@@ -71,7 +91,7 @@ describe("checkpoint system", () => {
 
     // Original file should be restored
     expect(fs.readFileSync(path.join(tmpDir, "original.txt"), "utf-8")).toBe("original content");
-    // New file should be removed (clean -fd)
+    // New file should be removed
     expect(fs.existsSync(path.join(tmpDir, "new-file.txt"))).toBe(false);
   });
 

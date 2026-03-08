@@ -414,7 +414,7 @@ src/
 ├── agent.js              Agent loop (EventEmitter): prompt → LLM → tool calls → repeat
 │                         Includes architect mode, git checkpoints, granular auto-approve
 ├── architect.js          Architect mode — read-only analysis pass → plan → execution
-├── checkpoint.js         Git stash-based checkpoints for rollback (undo support)
+├── checkpoint.js         Shadow git repo checkpoints for rollback (undo support)
 ├── context.js            Project context gathering (file tree, git, repo map, memory bank)
 ├── context-manager.js    Token counting, context pruning, message summarization
 ├── logger.js             Logging with configurable levels
@@ -464,7 +464,7 @@ Use `/architect <task>` to run a task in architect mode, or `/architect` to togg
 
 ### Git Checkpoints
 
-The agent automatically creates git stash-based checkpoints before each operation. Use `/undo` to roll back to the previous checkpoint, or `/checkpoints` to list available restore points.
+The agent automatically creates checkpoints before each operation using a secondary git repo in `.smol-agent/checkpoints/`. This keeps checkpoint history completely isolated from your main repo — no stash pollution, no staging side effects. Use `/undo` to roll back to the previous checkpoint, or `/checkpoints` to list available restore points.
 
 ### Repository Map with PageRank (inspired by Aider)
 
