@@ -6,6 +6,7 @@ import { loadContextDocs } from "./tools/context_docs.js";
 import { loadSkills } from "./skills.js";
 import { logger } from "./logger.js";
 import { buildRepoMap } from "./repo-map.js";
+import { loadMemoryBank } from "./memory-bank.js";
 
 const IGNORED = new Set([
   "node_modules", ".git", "__pycache__", ".next", "dist", "build",
@@ -68,6 +69,12 @@ export async function gatherContext(cwd, contextSize = 100) {
       sections.push(`## Memories from previous sessions\n${memLines.join("\n")}${suffix}`);
     }
   } catch (err) { logger.debug(`No memories loaded: ${err.message}`); }
+
+  // 6b. Memory Bank — structured cross-session knowledge (Kilocode pattern)
+  try {
+    const memoryBank = await loadMemoryBank(cwd);
+    if (memoryBank) sections.push(memoryBank);
+  } catch (err) { logger.debug(`Memory bank skipped: ${err.message}`); }
 
   // 7. Codebase context docs from previous sessions
   const docs = await loadContextDocs(cwd);

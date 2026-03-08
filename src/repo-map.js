@@ -27,8 +27,29 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { logger } from "./logger.js";
 
-// tree-sitter is CJS — bridge to ESM
+// tree-sitter is CJS — bridge to ESM (also used for graphology)
 const require = createRequire(import.meta.url);
+
+// ── Graphology for PageRank ──────────────────────────────────────────
+
+let _Graph = null;
+let _pagerank = null;
+
+function getGraph() {
+  if (!_Graph) {
+    _Graph = require("graphology").Graph;
+  }
+  return _Graph;
+}
+
+function getPageRank() {
+  if (!_pagerank) {
+    _pagerank = require("graphology-metrics/centrality/pagerank");
+  }
+  return _pagerank;
+}
+
+// NOTE: require is defined above (shared by tree-sitter and graphology)
 
 // ── Lazy-loaded grammars ──────────────────────────────────────────────
 
@@ -478,6 +499,120 @@ const LANG_EXTRACTORS = {
   ruby: extractRubySymbols,
 };
 
+// ── Reference (identifier) extraction for PageRank ───────────────────
+
+/**
+ * Collect all identifier references from an AST.
+ * Returns a Set of identifier names used in the file (for cross-file matching).
+ */
+function extractReferences(rootNode) {
+  const refs = new Set();
+  const stack = [rootNode];
+
+  while (stack.length > 0) {
+    const node = stack.pop();
+    // Collect identifiers that look like references to definitions
+    if (
+      node.type === "identifier" ||
+      node.type === "type_identifier" ||
+      node.type === "property_identifier" ||
+      node.type === "field_identifier"
+    ) {
+      const text = node.text;
+      // Skip very short names (a, b, i, j) and all-caps constants
+      if (text.length > 2 && text !== text.toUpperCase()) {
+        refs.add(text);
+      }
+    }
+    // Walk children
+    for (let i = 0; i < node.childCount; i++) {
+      stack.push(node.child(i));
+    }
+  }
+
+  return refs;
+}
+
+/**
+ * Build a cross-file reference graph and compute PageRank scores.
+ *
+ * Algorithm (inspired by Aider):
+ *   1. For each file, collect defined symbol names and referenced identifiers
+ *   2. Build a directed graph: edge from file A → file B when A references
+ *      a symbol defined in B (weighted by name length — longer = more specific)
+ *   3. Run PageRank to determine file importance
+ *
+ * @param {Map<string, object[]>} fileSymbols - Map of relPath → symbol[]
+ * @param {Map<string, Set<string>>} fileRefs - Map of relPath → Set of identifier references
+ * @returns {Map<string, number>} Map of relPath → PageRank score
+ */
+function computePageRank(fileSymbols, fileRefs) {
+  const Graph = getGraph();
+  const pagerank = getPageRank();
+
+  const graph = new Graph({ type: "directed", allowSelfLoops: false });
+
+  // Add all files as nodes
+  for (const relPath of fileSymbols.keys()) {
+    graph.addNode(relPath);
+  }
+
+  // Build definition index: symbolName → [files that define it]
+  const defIndex = new Map();
+  for (const [relPath, symbols] of fileSymbols) {
+    for (const sym of symbols) {
+      // Use base name (strip Class. or Class:: prefixes)
+      const baseName = sym.name.includes(".")
+        ? sym.name.split(".").pop()
+        : sym.name.includes("::")
+          ? sym.name.split("::").pop()
+          : sym.name.includes("#")
+            ? sym.name.split("#").pop()
+            : sym.name;
+
+      if (!defIndex.has(baseName)) {
+        defIndex.set(baseName, []);
+      }
+      defIndex.get(baseName).push(relPath);
+    }
+  }
+
+  // Add edges: referencer → definer
+  for (const [refFile, refs] of fileRefs) {
+    if (!graph.hasNode(refFile)) continue;
+
+    for (const refName of refs) {
+      const definers = defIndex.get(refName);
+      if (!definers) continue;
+
+      for (const defFile of definers) {
+        if (defFile === refFile) continue; // skip self-refs
+        if (!graph.hasNode(defFile)) continue;
+
+        // Weight by name length (longer names = more specific references)
+        const weight = Math.min(refName.length / 5, 3);
+
+        if (graph.hasEdge(refFile, defFile)) {
+          const existing = graph.getEdgeAttribute(refFile, defFile, "weight");
+          graph.setEdgeAttribute(refFile, defFile, "weight", existing + weight);
+        } else {
+          graph.addEdge(refFile, defFile, { weight });
+        }
+      }
+    }
+  }
+
+  // Run PageRank
+  const scores = pagerank(graph, {
+    alpha: 0.85,
+    maxIterations: 100,
+    tolerance: 1e-6,
+    weighted: true,
+  });
+
+  return new Map(Object.entries(scores));
+}
+
 // ── Utility ───────────────────────────────────────────────────────────
 
 function dedup(symbols) {
@@ -537,6 +672,11 @@ export function clearRepoMapCache() {
   _cachedMap = null;
   _cachedCwd = null;
   _cachedAt = 0;
+  // Reset parser and grammars to avoid stale native module state (important for test isolation)
+  _parser = null;
+  for (const key of Object.keys(_grammars)) {
+    delete _grammars[key];
+  }
 }
 
 // ── Main entry point ──────────────────────────────────────────────────
@@ -562,8 +702,9 @@ export async function buildRepoMap(cwd, { maxTokens = 1500 } = {}) {
   const files = await collectFiles(cwd);
   if (files.length === 0) return null;
 
-  // Extract symbols from each file
+  // Extract symbols and references from each file
   const fileSymbols = new Map(); // relativePath -> symbol[]
+  const fileRefs = new Map();    // relativePath -> Set<string> (identifier references)
   let totalSymbols = 0;
 
   for (const file of files) {
@@ -585,6 +726,12 @@ export async function buildRepoMap(cwd, { maxTokens = 1500 } = {}) {
         fileSymbols.set(relPath, symbols);
         totalSymbols += symbols.length;
       }
+
+      // Extract references for PageRank graph
+      const refs = extractReferences(tree.rootNode);
+      if (refs.size > 0) {
+        fileRefs.set(relPath, refs);
+      }
     } catch (err) {
       logger.debug(`repo-map: failed to parse ${relPath}: ${err.message}`);
     }
@@ -592,15 +739,30 @@ export async function buildRepoMap(cwd, { maxTokens = 1500 } = {}) {
 
   if (fileSymbols.size === 0) return null;
 
+  // Compute PageRank scores for cross-file reference ranking
+  let pageRankScores = new Map();
+  try {
+    if (fileSymbols.size > 1 && fileRefs.size > 0) {
+      pageRankScores = computePageRank(fileSymbols, fileRefs);
+    }
+  } catch (err) {
+    logger.debug(`repo-map: PageRank computation failed, falling back to symbol count: ${err.message}`);
+  }
+
   // Build the map, fitting within token budget
   // Approximate: 1 token ≈ 4 chars
   const charBudget = maxTokens * 4;
   const lines = [];
   let totalChars = 0;
 
-  // Sort files by number of symbols (more symbols = more important)
+  // Sort files by PageRank score (primary) with symbol count as tiebreaker
   const sortedFiles = [...fileSymbols.entries()]
-    .sort((a, b) => b[1].length - a[1].length);
+    .sort((a, b) => {
+      const scoreA = pageRankScores.get(a[0]) || 0;
+      const scoreB = pageRankScores.get(b[0]) || 0;
+      if (Math.abs(scoreA - scoreB) > 1e-9) return scoreB - scoreA;
+      return b[1].length - a[1].length;
+    });
 
   for (const [relPath, symbols] of sortedFiles) {
     const symbolParts = symbols.map(s => `${s.kind} ${s.name}:${s.line}`);
@@ -620,7 +782,8 @@ export async function buildRepoMap(cwd, { maxTokens = 1500 } = {}) {
   }
 
   const elapsed = Date.now() - startTime;
-  logger.info(`Repo map: ${fileSymbols.size} files, ${totalSymbols} symbols in ${elapsed}ms`);
+  const hasPageRank = pageRankScores.size > 0;
+  logger.info(`Repo map: ${fileSymbols.size} files, ${totalSymbols} symbols, PageRank=${hasPageRank} in ${elapsed}ms`);
 
   const result = `## Repository map\nKey symbols across ${fileSymbols.size} source files (use read_file to see details):\n${lines.join("\n")}`;
 

@@ -62,6 +62,9 @@ const TOOL_CATEGORIES = {
   complete_plan_step: "safe",
   update_plan_status: "safe",
   get_current_plan: "safe",
+  memory_bank_read: "safe",
+  memory_bank_write: "safe",
+  memory_bank_init: "safe",
 };
 
 /**

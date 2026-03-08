@@ -3,11 +3,19 @@
  * Tests project context gathering
  */
 
-import { describe, test, expect, beforeEach, afterEach } from '@jest/globals';
+import { describe, test, expect, beforeEach, afterEach, jest } from '@jest/globals';
 import { createTempDir, cleanupTempDir, createTestFile } from '../test-utils.js';
 import fs from 'node:fs';
 import path from 'node:path';
-import { gatherContext } from '../../src/context.js';
+
+// Mock repo-map to avoid loading tree-sitter native modules
+// which cause issues when Jest runs multiple test files in the same worker.
+jest.unstable_mockModule('../../src/repo-map.js', () => ({
+  buildRepoMap: async () => null,
+  clearRepoMapCache: () => {},
+}));
+
+const { gatherContext } = await import('../../src/context.js');
 
 describe('gatherContext', () => {
   let tempDir;

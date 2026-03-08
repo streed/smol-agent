@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { register } from "./registry.js";
 import { resolveJailedPath } from "../path-utils.js";
+import { lintFileFormatted } from "../ts-lint.js";
 
 const BINARY_PROBE_SIZE = 8192;
 
@@ -10,6 +11,87 @@ const BINARY_PROBE_SIZE = 8192;
 function normalizeWS(text) {
   return text.replace(/\r\n/g, '\n').replace(/[ \t]+/g, ' ');
 }
+
+// ── Fuzzy diff matching (Kilocode-inspired) ─────────────────────────
+
+/**
+ * Compute line-level similarity ratio between two text blocks.
+ * Uses a simplified Ratcliff/Obershelp-style approach: count matching
+ * lines (after trimming) divided by total lines.
+ *
+ * @param {string} a - First text block
+ * @param {string} b - Second text block
+ * @returns {number} Similarity ratio between 0 and 1
+ */
+function lineSimilarity(a, b) {
+  const linesA = a.split('\n').map(l => l.trim());
+  const linesB = b.split('\n').map(l => l.trim());
+  if (linesA.length === 0 && linesB.length === 0) return 1;
+  if (linesA.length === 0 || linesB.length === 0) return 0;
+
+  // Count lines in B that appear in A
+  const setA = new Set(linesA);
+  let matches = 0;
+  for (const line of linesB) {
+    if (line.length > 0 && setA.has(line)) matches++;
+  }
+
+  // Non-empty lines only for denominator
+  const nonEmptyA = linesA.filter(l => l.length > 0).length;
+  const nonEmptyB = linesB.filter(l => l.length > 0).length;
+  const total = Math.max(nonEmptyA, nonEmptyB);
+  if (total === 0) return 1;
+
+  return matches / total;
+}
+
+/**
+ * Find the best fuzzy match for oldText in the original file content.
+ * Slides a window of similar size over the original and picks the
+ * highest-similarity region above the threshold.
+ *
+ * @param {string} original - Full file content
+ * @param {string} oldText - Text to search for
+ * @param {number} threshold - Minimum similarity (0-1), default 0.8
+ * @returns {{ match: string, similarity: number } | null}
+ */
+function fuzzyMatch(original, oldText, threshold = 0.8) {
+  const oldLines = oldText.split('\n');
+  const origLines = original.split('\n');
+  const windowSize = oldLines.length;
+
+  if (windowSize > origLines.length) return null;
+
+  let bestMatch = null;
+  let bestScore = threshold; // minimum acceptable score
+  let bestStart = -1;
+
+  // Slide a window +/- 2 lines around the expected size
+  for (let delta = 0; delta <= 2; delta++) {
+    for (const size of [windowSize + delta, windowSize - delta]) {
+      if (size <= 0 || size > origLines.length) continue;
+
+      for (let i = 0; i <= origLines.length - size; i++) {
+        const candidate = origLines.slice(i, i + size).join('\n');
+        const score = lineSimilarity(candidate, oldText);
+
+        if (score > bestScore) {
+          bestScore = score;
+          bestMatch = candidate;
+          bestStart = i;
+        }
+      }
+    }
+  }
+
+  if (bestMatch && bestStart >= 0) {
+    return { match: bestMatch, similarity: bestScore, startLine: bestStart + 1 };
+  }
+  return null;
+}
+
+// Default fuzzy match threshold (80% similarity)
+const FUZZY_THRESHOLD = 0.8;
 
 // ── read_file ───────────────────────────────────────────────────────
 
@@ -129,12 +211,20 @@ register("write_file", {
     fs.writeFileSync(resolved, content, "utf-8");
 
     const lines = content.split("\n").length;
-    return {
+    const result = {
       filePath,
       action: existed ? "overwritten" : "created",
       lines,
       bytes: Buffer.byteLength(content, "utf-8"),
     };
+
+    // Tree-sitter syntax check after write
+    const lintWarning = lintFileFormatted(resolved);
+    if (lintWarning) {
+      result.syntaxWarning = lintWarning;
+    }
+
+    return result;
   },
 });
 
@@ -215,20 +305,27 @@ register("replace_in_file", {
           };
         }
       } else {
-        // 3. No match — find closest hint using first line
-        const firstLine = oldText.split('\n')[0].trim();
-        if (firstLine.length > 10) {
-          const origLines = original.split('\n');
-          const hintLine = origLines.find(l => l.trim().includes(firstLine));
-          if (hintLine) {
-            return {
-              error: `oldText not found in file. Closest match found near: "${hintLine.trim().slice(0, 120)}"`,
-            };
+        // 3. Fuzzy match — find the best approximate match above threshold
+        const fuzzyResult = fuzzyMatch(original, oldText, FUZZY_THRESHOLD);
+        if (fuzzyResult) {
+          matchedOldText = fuzzyResult.match;
+          matchType = `fuzzy (${Math.round(fuzzyResult.similarity * 100)}% match at line ${fuzzyResult.startLine})`;
+        } else {
+          // 4. No match — find closest hint using first line
+          const firstLine = oldText.split('\n')[0].trim();
+          if (firstLine.length > 10) {
+            const origLines = original.split('\n');
+            const hintLine = origLines.find(l => l.trim().includes(firstLine));
+            if (hintLine) {
+              return {
+                error: `oldText not found in file. Closest match found near: "${hintLine.trim().slice(0, 120)}"`,
+              };
+            }
           }
+          return {
+            error: "oldText not found in file. Make sure it matches exactly, including whitespace and indentation.",
+          };
         }
-        return {
-          error: "oldText not found in file. Make sure it matches exactly, including whitespace and indentation.",
-        };
       }
     }
 
@@ -245,12 +342,20 @@ register("replace_in_file", {
 
     fs.writeFileSync(resolved, updated, "utf-8");
 
-    return {
+    const result = {
       filePath,
       replacements: count,
       matchType,
       oldLines: oldText.split("\n").length,
       newLines: newText.split("\n").length,
     };
+
+    // Tree-sitter syntax check after edit
+    const lintWarning = lintFileFormatted(resolved);
+    if (lintWarning) {
+      result.syntaxWarning = lintWarning;
+    }
+
+    return result;
   },
 });
