@@ -83,6 +83,7 @@ export class AnthropicProvider extends BaseLLMProvider {
     // can assign them in order to subsequent tool result messages.
     let pendingToolUseIds = [];
 
+
     for (const msg of messages) {
       if (msg.role === "system") {
         system += (system ? "\n\n" : "") + msg.content;
@@ -134,6 +135,7 @@ export class AnthropicProvider extends BaseLLMProvider {
       if (msg.role === "assistant") {
         pendingToolUseIds = [];
       }
+
 
       // Regular user/assistant messages
       converted.push({
