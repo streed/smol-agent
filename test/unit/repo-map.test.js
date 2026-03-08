@@ -2,9 +2,17 @@ import { describe, it, expect, beforeEach, afterEach } from "@jest/globals";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import { createRequire } from "node:module";
 import { buildRepoMap, clearRepoMapCache } from "../../src/repo-map.js";
 
-describe("buildRepoMap", () => {
+// tree-sitter is a native module that may not be installed in all environments
+const require = createRequire(import.meta.url);
+let hasTreeSitter = false;
+try { require.resolve("tree-sitter"); hasTreeSitter = true; } catch { /* not installed */ }
+
+const describeIfTreeSitter = hasTreeSitter ? describe : describe.skip;
+
+describeIfTreeSitter("buildRepoMap", () => {
   let tmpDir;
 
   beforeEach(() => {

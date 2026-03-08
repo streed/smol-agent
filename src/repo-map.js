@@ -7,12 +7,9 @@
  *
  * Uses tree-sitter for accurate AST-based symbol extraction across languages:
  *   - JavaScript / JSX
- *   - TypeScript / TSX
  *   - Python
  *   - Go
- *   - Rust
- *   - Java
- *   - Ruby
+ *   - TypeScript / TSX, Rust, Java, Ruby (if grammars are installed)
  *
  * Design:
  *   - Scans source files in the project (respects ignore patterns)
@@ -58,8 +55,12 @@ const _grammars = {};
 
 function getParser() {
   if (!_parser) {
-    const Parser = require("tree-sitter");
-    _parser = new Parser();
+    try {
+      const Parser = require("tree-sitter");
+      _parser = new Parser();
+    } catch {
+      return null;
+    }
   }
   return _parser;
 }
@@ -697,6 +698,7 @@ export async function buildRepoMap(cwd, { maxTokens = 1500 } = {}) {
 
   const startTime = Date.now();
   const parser = getParser();
+  if (!parser) return null; // tree-sitter not installed
 
   // Collect source files
   const files = await collectFiles(cwd);
