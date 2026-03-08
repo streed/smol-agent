@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import * as ollama from "./ollama.js";
+import { createProvider } from "./providers/index.js";
 import * as registry from "./tools/registry.js";
 import { gatherContext, loadScopedRules } from "./context.js";
 import { logger, setLogBaseDir } from "./logger.js";
@@ -12,6 +12,11 @@ import { ensureInitialized as ensureTiktoken } from "./token-estimator.js";
 import { ShiftLeftFeedback } from "./shift-left.js";
 import { architectPass, formatPlanForEditor } from "./architect.js";
 import { createCheckpoint, rollbackToCheckpoint, listCheckpoints, cleanupCheckpoints } from "./checkpoint.js";
+import {
+  createSession,
+  saveSession as persistSession,
+  loadSession as fetchSession,
+} from "./sessions.js";
 
 // Import all tools so they self-register
 import "./tools/run_command.js";
@@ -27,6 +32,7 @@ import "./tools/memory.js";
 import { setSubAgentConfig } from "./tools/sub_agent.js";
 import "./tools/context_docs.js";
 import "./tools/git.js";
+import "./tools/session_tools.js";
 
 // ── Thinking tags parser ─────────────────────────────────────────────
 
@@ -236,10 +242,24 @@ export function detectToolLoop(recentSignatures, loopNudges) {
 // ── Agent ────────────────────────────────────────────────────────────
 
 export class Agent extends EventEmitter {
-  constructor({ host, model, contextSize, maxTokens, jailDirectory, coreToolsOnly } = {}) {
+  /**
+   * @param {object} options
+   * @param {string}  [options.host]          - Ollama host or API base URL
+   * @param {string}  [options.model]         - Model name
+   * @param {string}  [options.provider]      - Provider name ("ollama", "openai", "anthropic", "grok")
+   * @param {string}  [options.apiKey]        - API key for cloud providers
+   * @param {import('./providers/base.js').BaseLLMProvider} [options.llmProvider] - Pre-built provider instance
+   * @param {number}  [options.contextSize]   - AGENT.md line limit
+   * @param {number}  [options.maxTokens]     - Max context window
+   * @param {string}  [options.jailDirectory] - Working directory jail
+   * @param {boolean} [options.coreToolsOnly] - Restrict to core tools
+   */
+  constructor({ host, model, provider, apiKey, llmProvider, contextSize, maxTokens, jailDirectory, coreToolsOnly } = {}) {
     super();
-    this.client = ollama.createClient(host);
-    this.model = model || ollama.DEFAULT_MODEL;
+
+    // Create or use the provided LLM provider
+    this.llmProvider = llmProvider || createProvider({ provider, model, host, apiKey });
+    this.model = this.llmProvider.model;
     this.contextSize = contextSize; // AGENT.md line limit only
     this.maxTokens = maxTokens || 128000;
     this.jailDirectory = jailDirectory || process.cwd();
@@ -282,22 +302,27 @@ export class Agent extends EventEmitter {
     // Architect mode — two-pass planning/execution (Aider/Kilocode pattern)
     this._architectMode = false;
 
+    // Session tracking — persists conversation across CLI invocations
+    this._session = null;
+    this._autoSaveSession = true;
+
     // Set the global jail directory for all tools
     registry.setJailDirectory(this.jailDirectory);
 
-    setSearchClient(this.client);
-    setFetchClient(this.client);
+    // Set up Ollama client for web search/fetch if using the Ollama provider
+    if (this.llmProvider.client) {
+      setSearchClient(this.llmProvider.client);
+      setFetchClient(this.llmProvider.client);
+    }
 
     // Set up LLM-based summarization if model is large enough (has all tools)
     if (!coreToolsOnly) {
-      this.contextManager.setLLMClient(host, this.model);
+      this.contextManager.setLLMProvider(this.llmProvider);
     }
 
-    // Always configure sub-agent for delegation (share parent's client)
+    // Always configure sub-agent for delegation (share parent's provider)
     setSubAgentConfig({
-      client: this.client,
-      host,
-      model: this.model,
+      llmProvider: this.llmProvider,
       maxTokens: this.maxTokens,
       cwd: this.jailDirectory,
     });
@@ -370,13 +395,12 @@ export class Agent extends EventEmitter {
   /** Change the model on the fly. */
   setModel(newModel) {
     this.model = newModel;
-    // Update context manager's LLM client for summarization
-    this.contextManager.setLLMClient(this.client.host, this.model);
+    this.llmProvider.model = newModel;
+    // Update context manager's LLM provider for summarization
+    this.contextManager.setLLMProvider(this.llmProvider);
     // Update sub-agent config
     setSubAgentConfig({
-      client: this.client,
-      host: this.client.host,
-      model: this.model,
+      llmProvider: this.llmProvider,
       maxTokens: this.maxTokens,
       cwd: this.jailDirectory,
     });
@@ -398,7 +422,7 @@ export class Agent extends EventEmitter {
     } catch { /* proceed without context */ }
 
     // Build compact tool schema block so the model knows the available API
-    const allTools = registry.ollamaTools(this.coreToolsOnly);
+    const allTools = registry.getTools(this.coreToolsOnly);
     const toolLines = allTools.map(t => {
       const fn = t.function;
       const params = fn.parameters?.properties || {};
@@ -580,7 +604,7 @@ export class Agent extends EventEmitter {
       onProgress: (event) => this.emit("sub_agent_progress", event),
     });
 
-    const tools = registry.ollamaTools(this.coreToolsOnly);
+    const tools = registry.getTools(this.coreToolsOnly);
     let iterations = 0;
     let consecutiveAgentRetries = 0;
     let overflowRetries = 0;
@@ -655,8 +679,8 @@ export class Agent extends EventEmitter {
           };
 
           try {
-            for await (const event of ollama.chatStream(
-              this.client, this.model, this.messages, tools,
+            for await (const event of this.llmProvider.chatStream(
+              this.messages, tools,
               this.abortController.signal, this.maxTokens, onRetry,
             )) {
               resetStreamTimer();
@@ -788,6 +812,12 @@ export class Agent extends EventEmitter {
           const content = cleanedContent || "(no response)";
           this.emit("response", { content });
           this.emit("token_usage", this.getTokenInfo());
+
+          // Auto-save session after each completed run
+          if (this._session && this._autoSaveSession) {
+            this.saveSession().catch(() => {});
+          }
+
           return content;
         }
 
@@ -863,11 +893,22 @@ export class Agent extends EventEmitter {
             this._toolFailures.set(name, 0);
           }
 
+          // Extract _display (UI-only data) before truncation so it doesn't
+          // inflate the size estimate and so we can pass it to the UI untouched.
+          let display = null;
+          if (result && result._display) {
+            display = result._display;
+            const { _display, ...rest } = result;
+            result = rest;
+          }
+
           // Truncate large tool results to prevent context bloat (adaptive ceiling)
           const usageRatio = this.contextManager.getUsage(this.messages).percentage / 100;
           result = this.contextManager.truncateToolResult(result, usageRatio);
 
-          this.emit("tool_result", { name, result });
+          // Emit with _display attached so the UI can render a diff
+          this.emit("tool_result", { name, result: display ? { ...result, _display: display } : result });
+
           return result;
         };
 
@@ -1041,6 +1082,75 @@ export class Agent extends EventEmitter {
     return msg;
   }
 
+  // ── Session management ──────────────────────────────────────────────
+
+  /** Get the current session, or null if none. */
+  getSession() {
+    return this._session;
+  }
+
+  /**
+   * Start a new session.
+   * @param {string} [name] - Optional human-friendly name
+   */
+  startSession(name) {
+    this._session = createSession(name);
+    logger.info(`Session started: ${this._session.id}${name ? ` (${name})` : ""}`);
+    return this._session;
+  }
+
+  /**
+   * Resume a previously saved session.
+   * Restores conversation messages and reinitializes context.
+   * @param {string} sessionId - Session ID to resume
+   * @returns {boolean} True if session was loaded, false if not found
+   */
+  async resumeSession(sessionId) {
+    const data = await fetchSession(this.jailDirectory, sessionId);
+    if (!data) return false;
+
+    // Initialize system context first
+    await this._init();
+
+    // Restore conversation messages after system message
+    const restoredMessages = data.messages || [];
+    this.messages.push(...restoredMessages);
+
+    // Restore session metadata (without messages)
+    this._session = {
+      id: data.id,
+      name: data.name,
+      createdAt: data.createdAt,
+      updatedAt: data.updatedAt,
+      messageCount: data.messageCount,
+      summary: data.summary,
+    };
+
+    logger.info(`Session resumed: ${data.id} (${restoredMessages.length} messages)`);
+    this.emit("session_resumed", { session: this._session, messageCount: restoredMessages.length });
+    return true;
+  }
+
+  /**
+   * Save the current session to disk.
+   * Called automatically after each agent run if a session is active.
+   */
+  async saveSession() {
+    if (!this._session) return null;
+    try {
+      const saved = await persistSession(this.jailDirectory, this._session, this.messages);
+      // Update local session metadata
+      this._session.updatedAt = saved.updatedAt;
+      this._session.messageCount = saved.messageCount;
+      this._session.summary = saved.summary;
+      logger.info(`Session saved: ${this._session.id} (${saved.messageCount} messages)`);
+      return saved;
+    } catch (err) {
+      logger.warn(`Failed to save session: ${err.message}`);
+      return null;
+    }
+  }
+
   /** Cancel the current operation. */
   cancel() {
     if (this.running && this.abortController) {
@@ -1077,6 +1187,8 @@ export class Agent extends EventEmitter {
     this._pendingInjections = [];
     this._approveAll = false;
     this._shiftLeft.reset();
+    // Clear session so next run starts fresh (unless a new session is started)
+    this._session = null;
   }
 
   /** Get the current project context as a string. */
@@ -1100,7 +1212,7 @@ export class Agent extends EventEmitter {
     } catch { /* proceed without context */ }
 
     // Rebuild tool schema block
-    const allTools = registry.ollamaTools(this.coreToolsOnly);
+    const allTools = registry.getTools(this.coreToolsOnly);
     const toolLines = allTools.map(t => {
       const fn = t.function;
       const params = fn.parameters?.properties || {};

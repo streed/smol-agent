@@ -208,6 +208,7 @@ register("write_file", {
     }
 
     const existed = fs.existsSync(resolved);
+    const oldContent = existed ? fs.readFileSync(resolved, "utf-8") : "";
     fs.writeFileSync(resolved, content, "utf-8");
 
     const lines = content.split("\n").length;
@@ -216,6 +217,12 @@ register("write_file", {
       action: existed ? "overwritten" : "created",
       lines,
       bytes: Buffer.byteLength(content, "utf-8"),
+      _display: {
+        type: existed ? "overwrite" : "new",
+        filePath,
+        oldContent,
+        newContent: content,
+      },
     };
 
     // Tree-sitter syntax check after write
@@ -348,6 +355,13 @@ register("replace_in_file", {
       matchType,
       oldLines: oldText.split("\n").length,
       newLines: newText.split("\n").length,
+      _display: {
+        type: "replace",
+        filePath,
+        fileContent: original,
+        oldText: matchedOldText,
+        newText,
+      },
     };
 
     // Tree-sitter syntax check after edit

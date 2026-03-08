@@ -6,6 +6,7 @@ import path from "node:path";
 import fs from "node:fs";
 import os from "node:os";
 import { loadSettings } from "./settings.js";
+import { listSessions, findSession } from "./sessions.js";
 import { cleanup as cleanupTiktoken } from "./token-estimator.js";
 import { execSync } from "node:child_process";
 
@@ -107,6 +108,8 @@ function runSelfUpdate() {
 const args = process.argv.slice(2);
 let host = undefined;
 let model = undefined;
+let provider = undefined;       // --provider <name> (ollama, openai, anthropic, grok)
+let apiKey = undefined;         // --api-key <key>
 
 let promptText = undefined;
 let jailDirectory = process.cwd();
@@ -115,6 +118,10 @@ let autoApprove = false;
 let autoApproveWrites = false;
 let autoApproveExecute = false;
 let acpMode = false;
+let sessionId = undefined;      // --session <id> to resume
+let listSessionsFlag = false;   // --list-sessions
+let sessionName = undefined;    // --session-name <name> for new sessions
+let continueSession = false;    // --continue to resume the most recent session
 
 for (let i = 0; i < args.length; i++) {
   const a = args[i];
@@ -122,6 +129,10 @@ for (let i = 0; i < args.length; i++) {
     host = args[++i];
   } else if ((a === "--model" || a === "-m") && args[i + 1]) {
     model = args[++i];
+  } else if ((a === "--provider" || a === "-p") && args[i + 1]) {
+    provider = args[++i];
+  } else if (a === "--api-key" && args[i + 1]) {
+    apiKey = args[++i];
 
   } else if ((a === "--directory" || a === "-d") && args[i + 1]) {
     jailDirectory = path.resolve(args[++i]);
@@ -139,6 +150,14 @@ for (let i = 0; i < args.length; i++) {
     autoApproveExecute = true;
   } else if (a === "--acp") {
     acpMode = true;
+  } else if ((a === "--session" || a === "-s") && args[i + 1]) {
+    sessionId = args[++i];
+  } else if (a === "--continue" || a === "-c") {
+    continueSession = true;
+  } else if (a === "--session-name" && args[i + 1]) {
+    sessionName = args[++i];
+  } else if (a === "--list-sessions" || a === "--sessions") {
+    listSessionsFlag = true;
   } else if (a === "--self-update") {
     runSelfUpdate();
   } else if (a === "--help") {
@@ -151,14 +170,16 @@ for (let i = 0; i < args.length; i++) {
 }
 
 function printUsage() {
-  console.log(`smol-agent — a small coding agent powered by Ollama
+  console.log(`smol-agent — a small coding agent powered by local and cloud LLMs
 
 Usage:
   smol-agent [options] [prompt]
 
 Options:
-  -m, --model <name>        Ollama model to use (default: qwen3.5:27b)
-  -H, --host <url>          Ollama server URL (default: http://127.0.0.1:11434)
+  -m, --model <name>        Model to use (default depends on provider)
+  -p, --provider <name>     LLM provider: ollama, openai, anthropic, grok (default: ollama)
+  -H, --host <url>          Provider host/base URL (default: provider-specific)
+      --api-key <key>       API key for cloud providers (or use env vars)
 
   -d, --directory <path>    Set working directory and jail boundary (default: cwd)
       --all-tools           Expose all tools (auto-detected for 30B+ models)
@@ -169,8 +190,26 @@ Options:
       --self-update         Update smol-agent to the latest version
       --help                Show this help message
 
+Session Management:
+  -s, --session <id>        Resume a saved session by ID or name
+  -c, --continue            Resume the most recent session
+      --session-name <name> Name for the new session
+      --list-sessions       List all saved sessions
+      --sessions            Alias for --list-sessions
+
+Providers:
+  ollama (default)   Local LLMs via Ollama (no API key needed)
+  openai             OpenAI API (set OPENAI_API_KEY or use --api-key)
+  anthropic          Anthropic Claude API (set ANTHROPIC_API_KEY or use --api-key)
+  grok               xAI Grok API (set XAI_API_KEY or use --api-key)
+
 Interactive Commands:
   /clear             Clear conversation history
+  /sessions          List saved sessions
+  /session save      Save the current session (with optional name)
+  /session load <id> Load a saved session
+  /session delete    Delete a saved session
+  /session rename    Rename a session
   /inspect           Dump current context to CONTEXT.md
   Ctrl+C             Cancel current operation (double-tap to exit)
   exit / quit        Exit the agent
@@ -178,15 +217,21 @@ Interactive Commands:
 Examples:
   smol-agent "add error handling to src/index.js"
   smol-agent -m codellama "refactor the auth module"
+  smol-agent -p openai -m gpt-4o "explain this codebase"
+  smol-agent -p anthropic "refactor the auth module"
+  smol-agent -p grok -m grok-3 "add tests"
   smol-agent -d ./my-project "add a new feature"
   smol-agent                                         # interactive mode`);
 }
 
 // ── Boot ─────────────────────────────────────────────────────────────
 
-// Auto-detect: expose all tools for 30B+ models, core-only for smaller ones.
-function shouldUseCoreOnly(modelName) {
+// Auto-detect: expose all tools for 30B+ models or cloud providers, core-only for smaller local models.
+function shouldUseCoreOnly(modelName, providerName) {
   if (allTools === true) return false;
+  // Cloud providers (openai, anthropic, grok) use large models — always expose all tools
+  const cloudProviders = new Set(["openai", "anthropic", "grok"]);
+  if (cloudProviders.has((providerName || "").toLowerCase())) return false;
   if (!modelName) return true; // default to core-only
   // Extract parameter count from model name (e.g. "qwen2.5-coder:32b" → 32)
   const sizeMatch = modelName.match(/(\d+)[bB]/);
@@ -197,7 +242,28 @@ function shouldUseCoreOnly(modelName) {
   return true; // unknown size → be conservative
 }
 
-const coreToolsOnly = shouldUseCoreOnly(model);
+const coreToolsOnly = shouldUseCoreOnly(model, provider);
+
+// ── List sessions (non-interactive) ───────────────────────────────────
+if (listSessionsFlag) {
+  const sessions = await listSessions(jailDirectory);
+  if (sessions.length === 0) {
+    console.log("No saved sessions.");
+  } else {
+    console.log(`Saved sessions (${sessions.length}):\n`);
+    for (const s of sessions) {
+      const name = s.name ? ` "${s.name}"` : "";
+      const date = new Date(s.updatedAt).toLocaleString();
+      const msgs = s.messageCount || 0;
+      console.log(`  ${s.id}${name}  (${msgs} msgs, ${date})`);
+      if (s.summary) {
+        const summary = s.summary.length > 80 ? s.summary.slice(0, 77) + "..." : s.summary;
+        console.log(`    ${summary}`);
+      }
+    }
+  }
+  process.exit(0);
+}
 
 // ── ACP mode ──────────────────────────────────────────────────────────
 if (acpMode) {
@@ -205,13 +271,14 @@ if (acpMode) {
   startACPServer({
     host,
     model,
-
+    provider,
+    apiKey,
     coreToolsOnly,
     autoApprove,
   });
 } else {
   // ── TUI mode ────────────────────────────────────────────────────────
-  const agent = new Agent({ host, model, jailDirectory, coreToolsOnly });
+  const agent = new Agent({ host, model, provider, apiKey, jailDirectory, coreToolsOnly });
 
   // Load persisted settings, CLI flags override
   const settings = await loadSettings(jailDirectory);
@@ -222,6 +289,39 @@ if (acpMode) {
   // Granular auto-approve categories
   if (autoApproveWrites) agent.approveCategory("write");
   if (autoApproveExecute) agent.approveCategory("execute");
+
+  // ── Session handling ──
+  let resumedSession = false;
+
+  if (sessionId) {
+    // Resume a specific session by ID or name
+    const match = await findSession(jailDirectory, sessionId);
+    if (match) {
+      resumedSession = await agent.resumeSession(match.id);
+      if (!resumedSession) {
+        console.error(`Failed to load session: ${sessionId}`);
+        process.exit(1);
+      }
+    } else {
+      console.error(`Session not found: ${sessionId}`);
+      console.log("Use --list-sessions to see available sessions.");
+      process.exit(1);
+    }
+  } else if (continueSession) {
+    // Resume the most recent session
+    const sessions = await listSessions(jailDirectory);
+    if (sessions.length > 0) {
+      resumedSession = await agent.resumeSession(sessions[0].id);
+      if (!resumedSession) {
+        console.error("Failed to resume most recent session.");
+      }
+    }
+  }
+
+  // Start a new session if not resuming (always track sessions)
+  if (!resumedSession) {
+    agent.startSession(sessionName);
+  }
 
   startApp(agent, promptText);
 }

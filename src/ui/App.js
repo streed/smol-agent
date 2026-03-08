@@ -16,10 +16,17 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { execFile } from "node:child_process";
 import { setAskHandler } from "../tools/ask_user.js";
+import { formatDiff, formatReplaceDiff, formatNewFileDiff } from "./diff.js";
 import { saveSetting } from "../settings.js";
 import { listModels } from "../ollama.js";
 import { logger, readRecentLogs } from "../logger.js";
 import { getSkillNames } from "../skills.js";
+import {
+  listSessions,
+  findSession,
+  deleteSession,
+  renameSession,
+} from "../sessions.js";
 
 // ═══ Loading animation (SMOL AGENT rain effect) ═══
 
@@ -505,6 +512,8 @@ export function startApp(agent, initialPrompt) {
     { name: "undo", description: "Rollback changes from the last agent run" },
     { name: "checkpoints", description: "List available rollback checkpoints" },
     { name: "approve", description: "Auto-approve a tool category (write/execute/network/all)" },
+    { name: "sessions", description: "List saved sessions" },
+    { name: "session", description: "Manage sessions (save/load/delete/rename)" },
     { name: "inspect", description: "Dump context to file" },
     { name: "reload-skills", description: "Reload skills from global and local directories" },
     { name: "skills", description: "List available skills" },
@@ -586,8 +595,171 @@ export function startApp(agent, initialPrompt) {
 
     if (trimmed === "/clear") {
       agent.reset();
+      // Start a fresh session after clear
+      agent.startSession();
       chatView.output.clear();
-      chatView.addLog(chalk.dim("    ⎿  (conversation cleared)"));
+      chatView.addLog(chalk.dim("    ⎿  (conversation cleared, new session started)"));
+      return;
+    }
+
+    // ── Session commands ──
+    if (trimmed === "/sessions") {
+      try {
+        const sessions = await listSessions(agent.jailDirectory || process.cwd());
+        const current = agent.getSession();
+        if (sessions.length === 0) {
+          chatView.addLog(chalk.dim("    ⎿  No saved sessions."));
+        } else {
+          chatView.addLog(chalk.dim(`    ⎿  Saved sessions (${sessions.length}):`));
+          for (const s of sessions) {
+            const isCurrent = current && current.id === s.id;
+            const marker = isCurrent ? chalk.green(" *") : "  ";
+            const name = s.name ? chalk.bold(` "${s.name}"`) : "";
+            const date = new Date(s.updatedAt).toLocaleString();
+            const msgs = s.messageCount || 0;
+            chatView.addLog(chalk.dim(`      ${marker} ${chalk.cyan(s.id)}${name}  (${msgs} msgs, ${date})`));
+            if (s.summary) {
+              const summary = s.summary.length > 70 ? s.summary.slice(0, 67) + "..." : s.summary;
+              chatView.addLog(chalk.dim(`           ${summary}`));
+            }
+          }
+          chatView.addLog(chalk.dim("        Use /session load <id> to resume a session"));
+        }
+      } catch (err) {
+        chatView.addLog(chalk.red(` ✗ Failed to list sessions: ${err.message}`));
+      }
+      return;
+    }
+
+    if (trimmed.startsWith("/session ") || trimmed === "/session") {
+      const parts = trimmed.split(/\s+/);
+      const subCmd = parts[1] || "help";
+      const arg = parts.slice(2).join(" ");
+
+      if (subCmd === "save") {
+        const session = agent.getSession();
+        if (!session) {
+          agent.startSession(arg || undefined);
+        } else if (arg) {
+          session.name = arg;
+        }
+        try {
+          const saved = await agent.saveSession();
+          if (saved) {
+            const name = saved.name ? ` "${saved.name}"` : "";
+            chatView.addLog(chalk.dim(`    ⎿  Session saved: ${saved.id}${name} (${saved.messageCount} messages)`));
+          } else {
+            chatView.addLog(chalk.red(" ✗ No active session to save."));
+          }
+        } catch (err) {
+          chatView.addLog(chalk.red(` ✗ Failed to save session: ${err.message}`));
+        }
+        return;
+      }
+
+      if (subCmd === "load" || subCmd === "resume") {
+        if (!arg) {
+          chatView.addLog(chalk.red(" ✗ Usage: /session load <id or name>"));
+          return;
+        }
+        try {
+          const match = await findSession(agent.jailDirectory || process.cwd(), arg);
+          if (!match) {
+            chatView.addLog(chalk.red(` ✗ Session not found: ${arg}`));
+            return;
+          }
+          // Save current session before switching
+          if (agent.getSession()) {
+            await agent.saveSession();
+          }
+          agent.reset();
+          const loaded = await agent.resumeSession(match.id);
+          if (loaded) {
+            const session = agent.getSession();
+            const name = session.name ? ` "${session.name}"` : "";
+            chatView.output.clear();
+            chatView.addLog(chalk.dim(`    ⎿  Session loaded: ${session.id}${name} (${session.messageCount} messages)`));
+          } else {
+            chatView.addLog(chalk.red(` ✗ Failed to load session: ${arg}`));
+          }
+        } catch (err) {
+          chatView.addLog(chalk.red(` ✗ Failed to load session: ${err.message}`));
+        }
+        return;
+      }
+
+      if (subCmd === "delete" || subCmd === "rm") {
+        if (!arg) {
+          chatView.addLog(chalk.red(" ✗ Usage: /session delete <id or name>"));
+          return;
+        }
+        try {
+          const match = await findSession(agent.jailDirectory || process.cwd(), arg);
+          if (!match) {
+            chatView.addLog(chalk.red(` ✗ Session not found: ${arg}`));
+            return;
+          }
+          // Don't delete the current session
+          const current = agent.getSession();
+          if (current && current.id === match.id) {
+            chatView.addLog(chalk.red(" ✗ Cannot delete the active session. Use /clear first."));
+            return;
+          }
+          const deleted = await deleteSession(agent.jailDirectory || process.cwd(), match.id);
+          if (deleted) {
+            chatView.addLog(chalk.dim(`    ⎿  Session deleted: ${match.id}`));
+          } else {
+            chatView.addLog(chalk.red(` ✗ Failed to delete session: ${match.id}`));
+          }
+        } catch (err) {
+          chatView.addLog(chalk.red(` ✗ Failed to delete session: ${err.message}`));
+        }
+        return;
+      }
+
+      if (subCmd === "rename") {
+        if (!arg) {
+          chatView.addLog(chalk.red(" ✗ Usage: /session rename <new name>"));
+          chatView.addLog(chalk.dim("        Renames the current session."));
+          return;
+        }
+        const current = agent.getSession();
+        if (!current) {
+          chatView.addLog(chalk.red(" ✗ No active session to rename."));
+          return;
+        }
+        try {
+          current.name = arg;
+          await agent.saveSession();
+          chatView.addLog(chalk.dim(`    ⎿  Session renamed to: "${arg}"`));
+        } catch (err) {
+          chatView.addLog(chalk.red(` ✗ Failed to rename session: ${err.message}`));
+        }
+        return;
+      }
+
+      if (subCmd === "info") {
+        const session = agent.getSession();
+        if (!session) {
+          chatView.addLog(chalk.dim("    ⎿  No active session."));
+        } else {
+          const name = session.name ? ` "${session.name}"` : "";
+          chatView.addLog(chalk.dim(`    ⎿  Current session: ${chalk.cyan(session.id)}${name}`));
+          chatView.addLog(chalk.dim(`        Created: ${new Date(session.createdAt).toLocaleString()}`));
+          chatView.addLog(chalk.dim(`        Updated: ${new Date(session.updatedAt).toLocaleString()}`));
+          chatView.addLog(chalk.dim(`        Messages: ${agent.getMessages().length}`));
+        }
+        return;
+      }
+
+      // Help / unknown subcommand
+      chatView.addLog(chalk.dim("    ⎿  Session commands:"));
+      chatView.addLog(chalk.dim("        /sessions               List all saved sessions"));
+      chatView.addLog(chalk.dim("        /session save [name]    Save current session"));
+      chatView.addLog(chalk.dim("        /session load <id>      Load/resume a session"));
+      chatView.addLog(chalk.dim("        /session delete <id>    Delete a session"));
+      chatView.addLog(chalk.dim("        /session rename <name>  Rename current session"));
+      chatView.addLog(chalk.dim("        /session info           Show current session info"));
       return;
     }
 
@@ -756,7 +928,8 @@ Reflect on these logs and determine if there's a skill worth creating. If the lo
         !trimmed.startsWith("/inspect") && !trimmed.startsWith("/reload-skills") && !trimmed.startsWith("/exit") &&
         !trimmed.startsWith("/quit") && !trimmed.startsWith("/reflect") && !trimmed.startsWith("/skills") &&
         !trimmed.startsWith("/architect") && !trimmed.startsWith("/undo") && !trimmed.startsWith("/checkpoints") &&
-        !trimmed.startsWith("/approve")) {
+        !trimmed.startsWith("/approve") &&
+        !trimmed.startsWith("/session") && !trimmed.startsWith("/sessions")) {
       const skillName = trimmed.slice(1).split(/\s+/)[0];
       
       // Check if this matches a skill
@@ -941,7 +1114,24 @@ Reflect on these logs and determine if there's a skill worth creating. If the lo
     tui.requestRender();
   };
 
-  const onToolResult = () => {
+  const onToolResult = ({ name, result }) => {
+    // Display a git-style diff for file editing tools
+    if (result && result._display) {
+      const d = result._display;
+      let diffLines = [];
+
+      if (d.type === "new") {
+        diffLines = formatNewFileDiff(d.newContent, d.filePath);
+      } else if (d.type === "overwrite") {
+        diffLines = formatDiff(d.oldContent, d.newContent, d.filePath);
+      } else if (d.type === "replace") {
+        diffLines = formatReplaceDiff(d.fileContent, d.oldText, d.newText, d.filePath);
+      }
+
+      for (const line of diffLines) {
+        chatView.addLog(line);
+      }
+    }
     tui.requestRender();
   };
 
@@ -969,6 +1159,11 @@ Reflect on these logs and determine if there's a skill worth creating. If the lo
     tui.requestRender();
   };
 
+  const onSessionResumed = ({ session, messageCount }) => {
+    const name = session.name ? ` "${session.name}"` : "";
+    chatView.addLog(chalk.dim(`    ⎿  Resumed session: ${session.id}${name} (${messageCount} messages)`));
+  };
+
   const onSubAgentProgress = (event) => {
     if (event.type === "start") {
       statusText = `delegate: ${(event.task || "researching").substring(0, 60)}...`;
@@ -992,6 +1187,7 @@ Reflect on these logs and determine if there's a skill worth creating. If the lo
   agent.on("context_ready", onContextReady);
   agent.on("error", onError);
   agent.on("retry", onRetry);
+  agent.on("session_resumed", onSessionResumed);
   agent.on("sub_agent_progress", onSubAgentProgress);
 
   // ── ask_user handler ──
@@ -1076,6 +1272,10 @@ Reflect on these logs and determine if there's a skill worth creating. If the lo
 
   // ── Cleanup ──
   function cleanup() {
+    // Save session before exiting
+    if (agent.getSession()) {
+      agent.saveSession().catch(() => {});
+    }
     statusArea.stopAnimation();
     loadingAnim.stop();
     if (streamThrottle) { clearTimeout(streamThrottle); streamThrottle = null; }
@@ -1089,6 +1289,7 @@ Reflect on these logs and determine if there's a skill worth creating. If the lo
     agent.off("context_ready", onContextReady);
     agent.off("error", onError);
     agent.off("retry", onRetry);
+    agent.off("session_resumed", onSessionResumed);
     agent.off("sub_agent_progress", onSubAgentProgress);
     tui.stop();
   }

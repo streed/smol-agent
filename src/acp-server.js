@@ -116,6 +116,8 @@ class SmolACPAgent {
     const agent = new Agent({
       host: this._host,
       model: this._model,
+      provider: this._provider,
+      apiKey: this._apiKey,
       jailDirectory: resolved,
       coreToolsOnly: this._coreToolsOnly,
     });
@@ -333,9 +335,12 @@ class SmolACPAgent {
       }
 
       const status = result?.error ? "failed" : "completed";
-      const resultPreview = result?.error
-        ? `error: ${result.error.slice(0, 80)}`
-        : JSON.stringify(result).slice(0, 100);
+
+      // Log without _display to keep logs readable
+      const { _display: _d, ...logResult } = result || {};
+      const resultPreview = logResult?.error
+        ? `error: ${logResult.error.slice(0, 80)}`
+        : JSON.stringify(logResult).slice(0, 100);
       logger.info(`[ACP] tool_result — ${callId}: ${name} → ${status} (${resultPreview})`);
 
       safeSessionUpdate(conn, {
@@ -500,6 +505,8 @@ export function startACPServer(options = {}) {
     // Pass config through to agent creation
     acpAgent._host = options.host;
     acpAgent._model = options.model;
+    acpAgent._provider = options.provider;
+    acpAgent._apiKey = options.apiKey;
     acpAgent._contextSize = options.contextSize;
     acpAgent._coreToolsOnly = options.coreToolsOnly;
     acpAgent._autoApprove = options.autoApprove;
