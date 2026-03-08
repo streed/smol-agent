@@ -62,9 +62,10 @@ const PROVIDER_PRESETS = {
  * @returns {BaseLLMProvider}
  */
 export function createProvider({ provider, model, host, apiKey } = {}) {
-  const providerName = (provider || process.env.SMOL_AGENT_PROVIDER || "ollama").toLowerCase();
+  const rawProvider = provider || process.env.SMOL_AGENT_PROVIDER || "ollama";
+  const providerName = rawProvider.toLowerCase();
 
-  // Check if it's a known preset
+  // Check if it's a known preset (case-insensitive)
   const preset = PROVIDER_PRESETS[providerName];
   if (preset) {
     const key = apiKey || (preset.envKey ? process.env[preset.envKey] : null);
@@ -76,10 +77,11 @@ export function createProvider({ provider, model, host, apiKey } = {}) {
     });
   }
 
-  // If provider looks like a URL, treat as custom OpenAI-compatible endpoint
-  if (providerName.startsWith("http://") || providerName.startsWith("https://")) {
+  // If provider looks like a URL, treat as custom OpenAI-compatible endpoint.
+  // Use the original (non-lowercased) value to preserve URL path casing.
+  if (rawProvider.startsWith("http://") || rawProvider.startsWith("https://")) {
     return new OpenAICompatibleProvider({
-      baseURL: providerName,
+      baseURL: rawProvider,
       model: model || "default",
       apiKey: apiKey || process.env.OPENAI_API_KEY,
       providerName: "custom",
@@ -88,7 +90,7 @@ export function createProvider({ provider, model, host, apiKey } = {}) {
 
   // Unknown provider name — try as OpenAI-compatible with the name as a hint
   throw new Error(
-    `Unknown provider: "${providerName}". ` +
+    `Unknown provider: "${rawProvider}". ` +
     `Available providers: ${Object.keys(PROVIDER_PRESETS).join(", ")}. ` +
     `Or pass a URL for a custom OpenAI-compatible endpoint.`
   );

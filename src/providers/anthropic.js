@@ -45,11 +45,14 @@ export class AnthropicProvider extends BaseLLMProvider {
   }
 
   _headers() {
-    return {
+    const headers = {
       "Content-Type": "application/json",
-      "x-api-key": this.apiKey,
       "anthropic-version": "2023-06-01",
     };
+    if (this.apiKey) {
+      headers["x-api-key"] = this.apiKey;
+    }
+    return headers;
   }
 
   /**
@@ -67,10 +70,18 @@ export class AnthropicProvider extends BaseLLMProvider {
   /**
    * Convert messages from the generic format to Anthropic's format.
    * Extracts the system message and converts tool messages to tool_result blocks.
+   *
+   * Tool result messages must include `tool_use_id` matching the prior assistant
+   * `tool_use` block IDs. We derive those IDs by looking at the most recent
+   * assistant message's tool_calls and correlating in order.
    */
   _convertMessages(messages) {
     let system = "";
     const converted = [];
+
+    // Track pending tool_use IDs from the most recent assistant message so we
+    // can assign them in order to subsequent tool result messages.
+    let pendingToolUseIds = [];
 
     for (const msg of messages) {
       if (msg.role === "system") {
@@ -79,12 +90,17 @@ export class AnthropicProvider extends BaseLLMProvider {
       }
 
       if (msg.role === "tool") {
+        // Derive tool_use_id: prefer explicit field, then take from pending queue
+        const toolUseId = msg.tool_use_id
+          || (pendingToolUseIds.length > 0 ? pendingToolUseIds.shift() : null)
+          || `tool_result_${converted.length}`;
+
         // Anthropic expects tool results as user messages with tool_result content
         converted.push({
           role: "user",
           content: [{
             type: "tool_result",
-            tool_use_id: msg.tool_use_id || `tool_${converted.length}`,
+            tool_use_id: toolUseId,
             content: msg.content,
           }],
         });
@@ -92,21 +108,31 @@ export class AnthropicProvider extends BaseLLMProvider {
       }
 
       if (msg.role === "assistant" && msg.tool_calls?.length) {
-        // Convert assistant tool calls to Anthropic's tool_use content blocks
+        // Convert assistant tool calls to Anthropic's tool_use content blocks.
+        // Generate stable IDs and record them so tool result messages can use them.
+        pendingToolUseIds = [];
         const content = [];
         if (msg.content) {
           content.push({ type: "text", text: msg.content });
         }
-        for (const tc of msg.tool_calls) {
+        for (let i = 0; i < msg.tool_calls.length; i++) {
+          const tc = msg.tool_calls[i];
+          const id = tc.id || `tool_use_${converted.length}_${i}`;
+          pendingToolUseIds.push(id);
           content.push({
             type: "tool_use",
-            id: tc.id || `tool_${converted.length}_${content.length}`,
+            id,
             name: tc.function.name,
             input: tc.function.arguments,
           });
         }
         converted.push({ role: "assistant", content });
         continue;
+      }
+
+      // Non-tool-call assistant or user messages reset the pending queue
+      if (msg.role === "assistant") {
+        pendingToolUseIds = [];
       }
 
       // Regular user/assistant messages
