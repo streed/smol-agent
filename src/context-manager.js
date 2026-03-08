@@ -143,10 +143,9 @@ export class ContextManager {
     this.lastPromptTokens = 0; // Actual count from API when available
     this.lastCompletionTokens = 0;
     this._messageCountAtLastUpdate = 0; // Track staleness of lastPromptTokens
+    this.llmProvider = null; // LLM provider for intelligent summarization
     this.ollamaHost = null; // Legacy: Host URL for LLM-based summarization
     this.llmModel = null;  // Legacy: Model name
-    this.llmProvider = null; // LLM provider for intelligent summarization
-
   }
 
   /**
