@@ -115,6 +115,8 @@ let promptText = undefined;
 let jailDirectory = process.cwd();
 let allTools = undefined; // undefined = auto-detect from model size
 let autoApprove = false;
+let autoApproveWrites = false;
+let autoApproveExecute = false;
 let acpMode = false;
 let sessionId = undefined;      // --session <id> to resume
 let listSessionsFlag = false;   // --list-sessions
@@ -142,6 +144,10 @@ for (let i = 0; i < args.length; i++) {
     allTools = true;
   } else if (a === "--auto-approve" || a === "--yolo") {
     autoApprove = true;
+  } else if (a === "--approve-writes") {
+    autoApproveWrites = true;
+  } else if (a === "--approve-execute") {
+    autoApproveExecute = true;
   } else if (a === "--acp") {
     acpMode = true;
   } else if ((a === "--session" || a === "-s") && args[i + 1]) {
@@ -178,6 +184,8 @@ Options:
   -d, --directory <path>    Set working directory and jail boundary (default: cwd)
       --all-tools           Expose all tools (auto-detected for 30B+ models)
       --auto-approve        Skip approval prompts for write/command tools (alias: --yolo)
+      --approve-writes      Auto-approve file write operations (but still prompt for commands)
+      --approve-execute     Auto-approve shell command execution (but still prompt for writes)
       --acp                 Run as ACP (Agent Client Protocol) server over stdio
       --self-update         Update smol-agent to the latest version
       --help                Show this help message
@@ -277,6 +285,10 @@ if (acpMode) {
   if (autoApprove || settings.autoApprove) {
     agent._approveAll = true;
   }
+
+  // Granular auto-approve categories
+  if (autoApproveWrites) agent.approveCategory("write");
+  if (autoApproveExecute) agent.approveCategory("execute");
 
   // ── Session handling ──
   let resumedSession = false;

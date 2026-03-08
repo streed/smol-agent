@@ -39,6 +39,31 @@ const DANGEROUS_TOOLS = new Set([
   "write_file", "replace_in_file", "run_command",
 ]);
 
+// Approval categories for granular auto-approve (Aider/Kilocode pattern)
+// Maps tool names to categories. Users can auto-approve per category.
+const TOOL_CATEGORIES = {
+  read_file: "read",
+  list_files: "read",
+  grep: "read",
+  write_file: "write",
+  replace_in_file: "write",
+  run_command: "execute",
+  git: "execute",
+  web_search: "network",
+  web_fetch: "network",
+  ask_user: "safe",
+  delegate: "safe",
+  remember: "safe",
+  recall: "safe",
+  save_context: "safe",
+  reflect: "safe",
+  save_plan: "safe",
+  load_plan_progress: "safe",
+  complete_plan_step: "safe",
+  update_plan_status: "safe",
+  get_current_plan: "safe",
+};
+
 /**
  * Validate and sanitize a file path to prevent jail escape
  */
@@ -171,6 +196,16 @@ export function requiresApproval(name) {
   return DANGEROUS_TOOLS.has(name);
 }
 
+/** Get the approval category for a tool. */
+export function getToolCategory(name) {
+  return TOOL_CATEGORIES[name] || "other";
+}
+
+/** Get all defined approval categories. */
+export function getApprovalCategories() {
+  return ["read", "write", "execute", "network", "safe", "other"];
+}
+
 export function list() {
   return [...tools.keys()];
 }
@@ -184,6 +219,8 @@ export default {
   validateToolArgs,
   validateFilePath,
   requiresApproval,
+  getToolCategory,
+  getApprovalCategories,
   setJailDirectory,
   getJailDirectory,
 };
