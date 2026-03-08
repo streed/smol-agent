@@ -10,6 +10,8 @@ import { classifyError, formatUserError } from "./errors.js";
 import { prehydrate } from "./prehydrate.js";
 import { ensureInitialized as ensureTiktoken } from "./token-estimator.js";
 import { ShiftLeftFeedback } from "./shift-left.js";
+import { architectPass, formatPlanForEditor } from "./architect.js";
+import { createCheckpoint, rollbackToCheckpoint, listCheckpoints, cleanupCheckpoints } from "./checkpoint.js";
 
 // Import all tools so they self-register
 import "./tools/run_command.js";
@@ -268,11 +270,17 @@ export class Agent extends EventEmitter {
     this._pendingInjections = [];
 
     // Approval system — handler set by UI, _approveAll toggled by user pressing "a"
+    // Granular auto-approve: per-category approval (Aider/Kilocode pattern)
+    // Categories: "read", "write", "execute", "network", "safe", "other"
     this._approvalHandler = null;
     this._approveAll = false;
+    this._approvedCategories = new Set(["safe", "read"]); // reads are always auto-approved
 
     // Shift-left feedback — auto-lint after file modifications (Stripe Minions pattern)
     this._shiftLeft = new ShiftLeftFeedback(this.jailDirectory);
+
+    // Architect mode — two-pass planning/execution (Aider/Kilocode pattern)
+    this._architectMode = false;
 
     // Set the global jail directory for all tools
     registry.setJailDirectory(this.jailDirectory);
@@ -304,6 +312,31 @@ export class Agent extends EventEmitter {
   }
 
   /**
+   * Auto-approve a tool category (e.g., "write", "execute", "network").
+   * Tools in approved categories skip the approval prompt.
+   */
+  approveCategory(category) {
+    this._approvedCategories.add(category);
+    logger.info(`Auto-approve enabled for category: ${category}`);
+  }
+
+  /**
+   * Revoke auto-approval for a tool category.
+   */
+  revokeCategory(category) {
+    if (category === "safe" || category === "read") return; // always approved
+    this._approvedCategories.delete(category);
+    logger.info(`Auto-approve revoked for category: ${category}`);
+  }
+
+  /**
+   * Get the set of currently auto-approved categories.
+   */
+  getApprovedCategories() {
+    return new Set(this._approvedCategories);
+  }
+
+  /**
    * Inject a user message into the running conversation.
    * The message will be picked up on the next loop iteration.
    */
@@ -311,6 +344,22 @@ export class Agent extends EventEmitter {
     if (this.running) {
       this._pendingInjections.push(message);
     }
+  }
+
+  /**
+   * Enable or disable architect mode.
+   * When enabled, the next run() will use a two-pass approach:
+   *   1. Architect pass: read-only analysis → produces a plan
+   *   2. Editor pass: executes the plan with full tools
+   */
+  setArchitectMode(enabled) {
+    this._architectMode = enabled;
+    logger.info(`Architect mode ${enabled ? "enabled" : "disabled"}`);
+  }
+
+  /** Check if architect mode is enabled. */
+  get architectMode() {
+    return this._architectMode;
   }
 
   /** Get current token usage info. */
@@ -449,6 +498,20 @@ export class Agent extends EventEmitter {
       this.messages.push({ role: "user", content: injected });
     }
 
+    // ── Git checkpoint (Kilocode/OpenCode pattern) ──
+    // Create a checkpoint before making changes so the user can /undo
+    try {
+      const checkpoint = createCheckpoint(this.jailDirectory, userMessage.slice(0, 60));
+      if (checkpoint.created) {
+        this.emit("checkpoint", { message: checkpoint.message });
+        logger.info(`Checkpoint created: ${checkpoint.message}`);
+      }
+      // Clean up old checkpoints (keep last 5)
+      cleanupCheckpoints(this.jailDirectory, 5);
+    } catch (err) {
+      logger.debug(`Checkpoint skipped: ${err.message}`);
+    }
+
     // ── Pre-hydration (Stripe Minions pattern) ──
     // Deterministically pre-load files referenced in the user message so
     // the model has immediate context without burning tool-call round-trips.
@@ -476,6 +539,36 @@ export class Agent extends EventEmitter {
       }
     } catch (err) {
       logger.debug(`Pre-hydration skipped: ${err.message}`);
+    }
+
+    // ── Architect mode (Aider/Kilocode pattern) ──
+    // When enabled, run a read-only analysis pass first to produce a plan,
+    // then inject the plan into the conversation for the editor pass.
+    if (this._architectMode) {
+      this.emit("status", { phase: "architect", message: "Analyzing codebase..." });
+      try {
+        const projectContext = this.messages[0]?.content?.split("# Project context\n\n")[1] || "";
+        const plan = await architectPass(this.client, this.model, userMessage, {
+          cwd: this.jailDirectory,
+          maxTokens: this.maxTokens,
+          projectContext,
+          signal: this.abortController.signal,
+          onProgress: (event) => this.emit("architect_progress", event),
+        });
+
+        if (plan && !plan.startsWith("(")) {
+          // Inject the plan as context for the editor pass
+          const planMessage = formatPlanForEditor(plan, userMessage);
+          this.messages.push({ role: "user", content: planMessage });
+          this.emit("architect_plan", { plan });
+          logger.info(`Architect plan produced (${plan.length} chars)`);
+        }
+      } catch (err) {
+        logger.warn(`Architect pass failed, continuing with direct execution: ${err.message}`);
+      }
+      // Auto-disable after use (one-shot)
+      this._architectMode = false;
+      this.emit("status", { phase: "editor", message: "Executing plan..." });
     }
 
     // Progressive compression of old messages (cheap, always runs)
@@ -779,9 +872,15 @@ export class Agent extends EventEmitter {
         };
 
         // Decide whether any call needs approval
+        // Granular: check both the global _approveAll flag and per-category approvals
         const needsApproval = this._approvalHandler && !this._approveAll;
         const anyDangerous = needsApproval &&
-          uniqueToolCalls.some(tc => registry.requiresApproval(tc.function.name));
+          uniqueToolCalls.some(tc => {
+            if (!registry.requiresApproval(tc.function.name)) return false;
+            // Check if the tool's category is auto-approved
+            const category = registry.getToolCategory(tc.function.name);
+            return !this._approvedCategories.has(category);
+          });
 
         let results;
         if (anyDangerous) {
@@ -792,8 +891,9 @@ export class Agent extends EventEmitter {
             const args = tc.function.arguments;
             this.emit("tool_call", { name, args });
 
-            // Request approval for dangerous tools
-            if (registry.requiresApproval(name) && !this._approveAll && this._approvalHandler) {
+            // Request approval for dangerous tools (respects per-category approvals)
+            const toolCategory = registry.getToolCategory(name);
+            if (registry.requiresApproval(name) && !this._approveAll && !this._approvedCategories.has(toolCategory) && this._approvalHandler) {
               let decision;
               try {
                 decision = await this._approvalHandler(name, args);
@@ -946,6 +1046,22 @@ export class Agent extends EventEmitter {
     if (this.running && this.abortController) {
       this.abortController.abort();
     }
+  }
+
+  /**
+   * Undo the last run's changes by rolling back to the most recent checkpoint.
+   * @returns {{ restored: boolean, message?: string, error?: string }}
+   */
+  undo() {
+    return rollbackToCheckpoint(this.jailDirectory);
+  }
+
+  /**
+   * List available checkpoints for rollback.
+   * @returns {Array<{ index: number, message: string }>}
+   */
+  getCheckpoints() {
+    return listCheckpoints(this.jailDirectory);
   }
 
   /** Reset conversation history and re-gather context on next run. */

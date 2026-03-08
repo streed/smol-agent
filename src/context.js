@@ -5,6 +5,7 @@ import { loadMemories } from "./tools/memory.js";
 import { loadContextDocs } from "./tools/context_docs.js";
 import { loadSkills } from "./skills.js";
 import { logger } from "./logger.js";
+import { buildRepoMap } from "./repo-map.js";
 
 const IGNORED = new Set([
   "node_modules", ".git", "__pycache__", ".next", "dist", "build",
@@ -31,6 +32,14 @@ export async function gatherContext(cwd, contextSize = 100) {
   // 3. Brief file tree (top-level + one level into subdirs)
   const tree = await topLevelTree(cwd);
   if (tree.length > 0) sections.push(`Files:\n${tree.join("\n")}`);
+
+  // 3b. Repository map — tree-sitter based symbol extraction (Aider pattern)
+  try {
+    const repoMap = await buildRepoMap(cwd, { maxTokens: 1500 });
+    if (repoMap) sections.push(repoMap);
+  } catch (err) {
+    logger.debug(`Repo map skipped: ${err.message}`);
+  }
 
   // 4. Git branch + uncommitted changes
   const git = gitInfo(cwd);
