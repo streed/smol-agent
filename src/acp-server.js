@@ -332,17 +332,13 @@ class SmolACPAgent {
         callId = this._nextCallId(session);
       }
 
-      // Strip _display (UI-only diff data) before sending over the wire
-      let cleanResult = result;
-      if (result && result._display) {
-        const { _display, ...rest } = result;
-        cleanResult = rest;
-      }
+      const status = result?.error ? "failed" : "completed";
 
-      const status = cleanResult?.error ? "failed" : "completed";
-      const resultPreview = cleanResult?.error
-        ? `error: ${cleanResult.error.slice(0, 80)}`
-        : JSON.stringify(cleanResult).slice(0, 100);
+      // Log without _display to keep logs readable
+      const { _display: _d, ...logResult } = result || {};
+      const resultPreview = logResult?.error
+        ? `error: ${logResult.error.slice(0, 80)}`
+        : JSON.stringify(logResult).slice(0, 100);
       logger.info(`[ACP] tool_result — ${callId}: ${name} → ${status} (${resultPreview})`);
 
       safeSessionUpdate(conn, {
@@ -351,7 +347,7 @@ class SmolACPAgent {
           sessionUpdate: "tool_call_update",
           toolCallId: callId,
           status,
-          rawOutput: cleanResult,
+          rawOutput: result,
         },
       });
     };
