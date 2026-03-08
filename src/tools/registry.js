@@ -2,7 +2,7 @@ import path from 'node:path';
 import { logger } from '../logger.js';
 
 /**
- * Tool registry — registers tools and provides them in Ollama's tool-call format.
+ * Tool registry — registers tools and provides them in standard tool-call format.
  */
 
 const tools = new Map();
@@ -104,10 +104,10 @@ export function register(name, { description, parameters, execute, core }) {
 }
 
 /**
- * Return the tools array in the format Ollama expects.
+ * Return the tools array in the standard format (OpenAI/Ollama-compatible).
  * @param {boolean} coreOnly - If true, only include core tools (default true)
  */
-export function ollamaTools(coreOnly = true) {
+export function getTools(coreOnly = true) {
   const out = [];
   for (const [name, tool] of tools) {
     if (coreOnly && !tool.core) continue;
@@ -122,6 +122,9 @@ export function ollamaTools(coreOnly = true) {
   }
   return out;
 }
+
+/** @deprecated Use getTools() instead. Kept for backward compatibility. */
+export const ollamaTools = getTools;
 
 /** Return names of all extended (non-core) tools currently registered. */
 export function extendedToolNames() {
@@ -174,6 +177,7 @@ export function list() {
 
 export default { 
   register, 
+  getTools,
   ollamaTools, 
   execute, 
   list, 

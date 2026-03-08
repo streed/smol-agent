@@ -116,6 +116,8 @@ class SmolACPAgent {
     const agent = new Agent({
       host: this._host,
       model: this._model,
+      provider: this._provider,
+      apiKey: this._apiKey,
       jailDirectory: resolved,
       coreToolsOnly: this._coreToolsOnly,
     });
@@ -500,6 +502,8 @@ export function startACPServer(options = {}) {
     // Pass config through to agent creation
     acpAgent._host = options.host;
     acpAgent._model = options.model;
+    acpAgent._provider = options.provider;
+    acpAgent._apiKey = options.apiKey;
     acpAgent._contextSize = options.contextSize;
     acpAgent._coreToolsOnly = options.coreToolsOnly;
     acpAgent._autoApprove = options.autoApprove;
