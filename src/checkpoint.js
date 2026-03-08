@@ -357,7 +357,7 @@ export function rollbackToCheckpoint(cwd, commitHash = null) {
  * @param {string} cwd - Working directory
  * @param {number} [keep=5] - Number of checkpoints to keep (unused, kept for API compat)
  */
-export function cleanupCheckpoints(cwd, keep = 5) {
+export function cleanupCheckpoints(cwd, _keep = 5) {
   const repoPath = checkpointRepoPath(cwd);
   if (!fs.existsSync(path.join(repoPath, ".git"))) return;
 

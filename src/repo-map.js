@@ -547,7 +547,7 @@ function extractReferences(rootNode) {
  * @param {Map<string, Set<string>>} fileRefs - Map of relPath → Set of identifier references
  * @returns {Map<string, number>} Map of relPath → PageRank score
  */
-function computePageRank(fileSymbols, fileRefs) {
+export function computePageRank(fileSymbols, fileRefs) {
   const Graph = getGraph();
   const pagerank = getPageRank();
 

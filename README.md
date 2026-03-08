@@ -147,6 +147,26 @@ To run Ollama as a background service on Linux:
 - Limit GPU access: `Environment="CUDA_VISIBLE_DEVICES=0"`
 - Expose to network: `Environment="OLLAMA_HOST=0.0.0.0:11434"`
 
+## Prerequisites
+
+- **Node.js** >= 18.0.0
+- **Ollama** (for local LLMs) or API access to OpenAI, Anthropic, or Grok
+
+### Optional: tree-sitter (for enhanced code analysis)
+
+smol-agent can use [tree-sitter](https://tree-sitter.github.io/tree-sitter/) for enhanced code analysis:
+
+- **Repository Map**: Builds a "table of contents" of your codebase showing key symbols (functions, classes, types) with their file locations. This gives the agent structural understanding without requiring multiple grep/read calls.
+- **Syntax Validation**: After file edits, validates syntax to catch obvious errors before the agent proceeds.
+
+**Requirements**: tree-sitter requires Node.js 18-22 (it does **not** build on Node 23+ due to C++20 requirements). To enable:
+
+```bash
+npm install tree-sitter tree-sitter-javascript tree-sitter-python tree-sitter-typescript tree-sitter-go
+```
+
+> **Note:** If installation fails, smol-agent will still work but without these enhanced features.
+
 ## Install
 
 ### Quick Install (recommended)

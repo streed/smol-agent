@@ -12,8 +12,11 @@ import {
   visibleWidth,
 } from "@mariozechner/pi-tui";
 import chalk from "chalk";
+import { createRequire } from "node:module";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
+
+const require = createRequire(import.meta.url);
 import { execFile } from "node:child_process";
 import { setAskHandler } from "../tools/ask_user.js";
 import { formatDiff, formatReplaceDiff, formatNewFileDiff } from "./diff.js";
@@ -25,8 +28,22 @@ import {
   listSessions,
   findSession,
   deleteSession,
-  renameSession,
 } from "../sessions.js";
+
+// ═══ tree-sitter availability check ═══
+
+let _treeSitterAvailable = null;
+
+function isTreeSitterAvailable() {
+  if (_treeSitterAvailable !== null) return _treeSitterAvailable;
+  try {
+    require("tree-sitter");
+    _treeSitterAvailable = true;
+  } catch {
+    _treeSitterAvailable = false;
+  }
+  return _treeSitterAvailable;
+}
 
 // ═══ Loading animation (SMOL AGENT rain effect) ═══
 
@@ -578,6 +595,12 @@ export function startApp(agent, initialPrompt) {
     tui.setFocus(chatView);
     tui.requestRender();
 
+    // Show warning if tree-sitter is not available
+    if (!isTreeSitterAvailable()) {
+      chatView.addLog(chalk.yellow("    ⎿  tree-sitter not installed — enhanced code analysis disabled"));
+      chatView.addLog(chalk.dim("       Install with: npm install tree-sitter tree-sitter-javascript tree-sitter-python"));
+    }
+
     if (initialPrompt) {
       submit(initialPrompt);
     }
@@ -1114,7 +1137,7 @@ Reflect on these logs and determine if there's a skill worth creating. If the lo
     tui.requestRender();
   };
 
-  const onToolResult = ({ name, result }) => {
+  const onToolResult = ({ name: _name, result }) => {
     // Display a git-style diff for file editing tools
     if (result && result._display) {
       const d = result._display;

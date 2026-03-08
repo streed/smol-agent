@@ -8,11 +8,6 @@ import { logger } from "./logger.js";
 import { buildRepoMap } from "./repo-map.js";
 import { loadMemoryBank } from "./memory-bank.js";
 
-const IGNORED = new Set([
-  "node_modules", ".git", "__pycache__", ".next", "dist", "build",
-  "target", ".venv", "venv", "coverage", ".smol-agent",
-]);
-
 /**
  * Gather lightweight project context for the system prompt.
  *
@@ -30,11 +25,7 @@ export async function gatherContext(cwd, contextSize = 100) {
   const projectType = await detectProjectType(cwd);
   if (projectType) sections.push(`Project: ${projectType}`);
 
-  // 3. Brief file tree (top-level + one level into subdirs)
-  const tree = await topLevelTree(cwd);
-  if (tree.length > 0) sections.push(`Files:\n${tree.join("\n")}`);
-
-  // 3b. Repository map — tree-sitter based symbol extraction (Aider pattern)
+  // 3. Repository map — tree-sitter based symbol extraction (Aider pattern)
   try {
     const repoMap = await buildRepoMap(cwd, { maxTokens: 1500 });
     if (repoMap) sections.push(repoMap);
@@ -121,35 +112,6 @@ async function detectProjectType(cwd) {
     } catch { /* not found */ }
   }
   return null;
-}
-
-async function topLevelTree(cwd) {
-  const entries = [];
-  try {
-    const items = await fs.readdir(cwd, { withFileTypes: true });
-    items.sort((a, b) => a.name.localeCompare(b.name));
-    for (const item of items) {
-      if (IGNORED.has(item.name) || item.name.startsWith(".")) continue;
-      if (item.isDirectory()) {
-        entries.push(`${item.name}/`);
-        try {
-          const sub = await fs.readdir(path.join(cwd, item.name), {
-            withFileTypes: true,
-          });
-          sub.sort((a, b) => a.name.localeCompare(b.name));
-          for (const s of sub.slice(0, 20)) {
-            if (IGNORED.has(s.name)) continue;
-            entries.push(`  ${s.isDirectory() ? s.name + "/" : s.name}`);
-          }
-          if (sub.length > 20)
-            entries.push(`  ... (${sub.length - 20} more)`);
-        } catch { /* can't read subdir */ }
-      } else {
-        entries.push(item.name);
-      }
-    }
-  } catch { /* can't read cwd */ }
-  return entries;
 }
 
 function gitInfo(cwd) {

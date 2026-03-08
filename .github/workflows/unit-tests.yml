@@ -25,6 +25,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Install tree-sitter (optional, for full test coverage)
+        run: npm install tree-sitter tree-sitter-javascript tree-sitter-python tree-sitter-typescript tree-sitter-go tree-sitter-rust || echo "tree-sitter installation failed, some tests will be skipped"
+
       - name: Run security audit
         run: npm audit --audit-level=moderate || true
 

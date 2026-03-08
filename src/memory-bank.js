@@ -133,7 +133,7 @@ export async function writeBankFile(cwd, bankKey, content) {
 export async function initializeBank(cwd) {
   const bankPath = await ensureBankDir(cwd);
 
-  for (const [key, config] of Object.entries(BANK_FILES)) {
+  for (const [_key, config] of Object.entries(BANK_FILES)) {
     const filePath = path.join(bankPath, config.filename);
     if (!fsSync.existsSync(filePath)) {
       await fs.writeFile(filePath, config.template, "utf-8");
@@ -156,7 +156,7 @@ export async function loadMemoryBank(cwd) {
 
   const sections = [];
 
-  for (const [key, config] of Object.entries(BANK_FILES)) {
+  for (const [_key, config] of Object.entries(BANK_FILES)) {
     const filePath = path.join(bankPath, config.filename);
     try {
       const content = await fs.readFile(filePath, "utf-8");
