@@ -175,14 +175,14 @@ export function list() {
   return [...tools.keys()];
 }
 
-export default { 
-  register, 
+export default {
+  register,
   getTools,
-  ollamaTools, 
-  execute, 
-  list, 
-  validateToolArgs, 
-  validateFilePath, 
+  ollamaTools,
+  execute,
+  list,
+  validateToolArgs,
+  validateFilePath,
   requiresApproval,
   setJailDirectory,
   getJailDirectory,
