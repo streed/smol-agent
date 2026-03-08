@@ -68,7 +68,7 @@ export class OpenAICompatibleProvider extends BaseLLMProvider {
     }));
   }
 
-  async *chatStream(messages, tools, signal, maxTokens = DEFAULT_MAX_TOKENS, onRetry) {
+  async *chatStream(messages, tools, signal, _maxTokens = DEFAULT_MAX_TOKENS, onRetry) {
     const body = {
       model: this._model,
       messages,
@@ -88,7 +88,7 @@ export class OpenAICompatibleProvider extends BaseLLMProvider {
       if (!resp.ok) {
         const err = new Error(`API error: ${resp.status}`);
         err.status = resp.status;
-        try { err.body = await resp.text(); } catch {}
+        try { err.body = await resp.text(); } catch { /* ignore */ }
         throw err;
       }
       return resp;
@@ -153,7 +153,7 @@ export class OpenAICompatibleProvider extends BaseLLMProvider {
     // Parse accumulated tool call arguments
     const toolCalls = [...toolCallsById.values()].map(tc => {
       let args = tc.function.arguments;
-      try { args = JSON.parse(args); } catch {}
+      try { args = JSON.parse(args); } catch { /* not JSON */ }
       return { function: { name: tc.function.name, arguments: args } };
     });
 
@@ -164,7 +164,7 @@ export class OpenAICompatibleProvider extends BaseLLMProvider {
     };
   }
 
-  async chatWithRetry(messages, tools, signal, maxTokens = DEFAULT_MAX_TOKENS, onRetry) {
+  async chatWithRetry(messages, tools, signal, _maxTokens = DEFAULT_MAX_TOKENS, onRetry) {
     const body = {
       model: this._model,
       messages,
@@ -184,7 +184,7 @@ export class OpenAICompatibleProvider extends BaseLLMProvider {
       if (!resp.ok) {
         const err = new Error(`API error: ${resp.status}`);
         err.status = resp.status;
-        try { err.body = await resp.text(); } catch {}
+        try { err.body = await resp.text(); } catch { /* ignore */ }
         throw err;
       }
       return resp.json();

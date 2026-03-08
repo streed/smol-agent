@@ -94,6 +94,7 @@ export class BaseLLMProvider {
    * Streaming chat — async generator yielding token and done events.
    * Must be implemented by subclasses.
    */
+  // eslint-disable-next-line require-yield
   async *chatStream(_messages, _tools, _signal, _maxTokens, _onRetry) {
     throw new Error("Subclass must implement chatStream()");
   }

@@ -193,7 +193,7 @@ export class AnthropicProvider extends BaseLLMProvider {
       if (!resp.ok) {
         const err = new Error(`Anthropic API error: ${resp.status}`);
         err.status = resp.status;
-        try { err.body = await resp.text(); } catch {}
+        try { err.body = await resp.text(); } catch { /* ignore */ }
         throw err;
       }
       return resp;
@@ -305,7 +305,7 @@ export class AnthropicProvider extends BaseLLMProvider {
       if (!resp.ok) {
         const err = new Error(`Anthropic API error: ${resp.status}`);
         err.status = resp.status;
-        try { err.body = await resp.text(); } catch {}
+        try { err.body = await resp.text(); } catch { /* ignore */ }
         throw err;
       }
       return resp.json();
