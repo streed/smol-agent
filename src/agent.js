@@ -315,6 +315,7 @@ export class Agent extends EventEmitter {
       this.contextManager.setLLMProvider(this.llmProvider);
     }
 
+
     // Always configure sub-agent for delegation (share parent's provider)
     setSubAgentConfig({
       llmProvider: this.llmProvider,
