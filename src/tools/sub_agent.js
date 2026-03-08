@@ -1,5 +1,4 @@
 import { register } from "./registry.js";
-import * as ollama from "../ollama.js";
 import * as registry from "./registry.js";
 import { logger } from "../logger.js";
 import { isContextOverflowError } from "../errors.js";
@@ -7,9 +6,7 @@ import { parseToolCallsFromContent } from "../tool-call-parser.js";
 
 // Config set by parent agent — updated per run with signal/progress callback
 const config = {
-  client: null,
-  host: null,
-  model: null,
+  llmProvider: null,
   maxTokens: 32768,
   cwd: process.cwd(),
   signal: null,
@@ -17,16 +14,14 @@ const config = {
 };
 
 /**
- * Configure the sub-agent with the parent agent's connection details.
- * Called from Agent constructor (for client/model/cwd) and at each run()
+ * Configure the sub-agent with the parent agent's provider and settings.
+ * Called from Agent constructor (for provider/cwd) and at each run()
  * start (for signal/onProgress).
  */
 export function setSubAgentConfig(cfg) {
-  if (cfg.host !== undefined) config.host = cfg.host;
-  if (cfg.model !== undefined) config.model = cfg.model;
+  if (cfg.llmProvider !== undefined) config.llmProvider = cfg.llmProvider;
   if (cfg.maxTokens !== undefined) config.maxTokens = Math.min(cfg.maxTokens, 32768);
   if (cfg.cwd !== undefined) config.cwd = cfg.cwd;
-  if (cfg.client !== undefined) config.client = cfg.client;
   if (cfg.signal !== undefined) config.signal = cfg.signal;
   if (cfg.onProgress !== undefined) config.onProgress = cfg.onProgress;
 }
@@ -75,20 +70,19 @@ register("delegate", {
     required: ["task"],
   },
   async execute({ task, context }) {
-    if (!config.model) {
+    if (!config.llmProvider) {
       return {
         error:
           "Sub-agent not configured. Only available for 30B+ models.",
       };
     }
 
-    // Reuse parent's client or create one as fallback
-    const client = config.client || ollama.createClient(config.host);
+    const provider = config.llmProvider;
     const signal = config.signal;
     const onProgress = config.onProgress;
 
     const readOnlyTools = registry
-      .ollamaTools(true)
+      .getTools(true)
       .filter((t) => READ_ONLY_TOOLS.has(t.function.name));
 
     const systemPrompt = `You are a focused research sub-agent. Explore the codebase and return a concise answer.
@@ -119,9 +113,7 @@ ${context ? `\nContext: ${context}` : ""}`;
 
         let response;
         try {
-          response = await ollama.chatWithRetry(
-            client,
-            config.model,
+          response = await provider.chatWithRetry(
             messages,
             readOnlyTools,
             signal,
@@ -137,8 +129,8 @@ ${context ? `\nContext: ${context}` : ""}`;
             messages.push(...pruned);
             // Retry this iteration
             try {
-              response = await ollama.chatWithRetry(
-                client, config.model, messages, readOnlyTools, signal, config.maxTokens,
+              response = await provider.chatWithRetry(
+                messages, readOnlyTools, signal, config.maxTokens,
               );
             } catch (retryErr) {
               logger.error(`Sub-agent failed after prune: ${retryErr.message}`);

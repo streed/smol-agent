@@ -11,10 +11,14 @@
 import { logger } from './logger.js';
 
 /**
- * Summarize old messages using an LLM call.
+ * Summarize old messages using the configured LLM provider.
  * This preserves important context like file names, function names, and decisions made.
+ *
+ * @param {object[]} messages - Messages to summarize
+ * @param {import('./providers/base.js').BaseLLMProvider|string} llmProviderOrHost - LLM provider instance or legacy Ollama host URL
+ * @param {string} [model] - Model name (only used with legacy host URL)
  */
-export async function summarizeMessagesWithLLM(messages, ollamaHost, model) {
+export async function summarizeMessagesWithLLM(messages, llmProviderOrHost, model) {
   // Build the content to summarize
   let content = '';
   for (const msg of messages) {
@@ -55,49 +59,59 @@ Conversation to summarize:
 ${content}`;
 
   try {
-    const host = ollamaHost || process.env.OLLAMA_HOST || 'http://127.0.0.1:11434';
+    const summarizeMessages = [
+      { role: 'system', content: 'You are a helpful assistant that summarizes programming conversations concisely.' },
+      { role: 'user', content: summarizePrompt },
+    ];
 
-    // Try a smaller/faster model for summarization if available
-    let summarizationModel = model;
-    if (model.includes('32b') || model.includes('70b') || model.includes('72b')) {
-      const candidate = model.replace(/32b|70b|72b/, '7b');
-      try {
-        const checkResp = await fetch(`${host}/api/show`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name: candidate }),
-        });
-        if (checkResp.ok) {
-          summarizationModel = candidate;
-          logger.debug(`Using smaller model for summarization: ${candidate}`);
+    let summary;
+
+    // Support both new provider interface and legacy (host, model) arguments
+    if (llmProviderOrHost && typeof llmProviderOrHost === 'object' && typeof llmProviderOrHost.summarize === 'function') {
+      // New provider interface
+      summary = await llmProviderOrHost.summarize(summarizeMessages);
+    } else {
+      // Legacy: ollamaHost string + model — use direct HTTP call for backward compatibility
+      const host = llmProviderOrHost || process.env.OLLAMA_HOST || 'http://127.0.0.1:11434';
+
+      let summarizationModel = model;
+      if (model && (model.includes('32b') || model.includes('70b') || model.includes('72b'))) {
+        const candidate = model.replace(/32b|70b|72b/, '7b');
+        try {
+          const checkResp = await fetch(`${host}/api/show`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: candidate }),
+          });
+          if (checkResp.ok) {
+            summarizationModel = candidate;
+            logger.debug(`Using smaller model for summarization: ${candidate}`);
+          }
+        } catch {
+          // Model check failed, use original model
         }
-      } catch {
-        // Model check failed, use original model
       }
+
+      const response = await fetch(`${host}/api/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: summarizationModel,
+          messages: summarizeMessages,
+          stream: false,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Summarization API error: ${response.status}`);
+      }
+
+      const data = await response.json();
+      summary = data.message?.content || '';
     }
 
-    const response = await fetch(`${host}/api/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: summarizationModel,
-        messages: [
-          { role: 'system', content: 'You are a helpful assistant that summarizes programming conversations concisely.' },
-          { role: 'user', content: summarizePrompt },
-        ],
-        stream: false,
-      }),
-    });
-
-    if (!response.ok) {
-      throw new Error(`Summarization API error: ${response.status}`);
-    }
-
-    const data = await response.json();
-    const summary = data.message?.content || '';
-    
     logger.info(`LLM summarization created summary of ${messages.length} messages (${summary.length} chars)`);
-    
+
     return `I spoke to you previously about a number of things.
 ${summary}`;
   } catch (error) {
