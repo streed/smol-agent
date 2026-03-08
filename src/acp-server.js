@@ -332,10 +332,17 @@ class SmolACPAgent {
         callId = this._nextCallId(session);
       }
 
-      const status = result?.error ? "failed" : "completed";
-      const resultPreview = result?.error
-        ? `error: ${result.error.slice(0, 80)}`
-        : JSON.stringify(result).slice(0, 100);
+      // Strip _display (UI-only diff data) before sending over the wire
+      let cleanResult = result;
+      if (result && result._display) {
+        const { _display, ...rest } = result;
+        cleanResult = rest;
+      }
+
+      const status = cleanResult?.error ? "failed" : "completed";
+      const resultPreview = cleanResult?.error
+        ? `error: ${cleanResult.error.slice(0, 80)}`
+        : JSON.stringify(cleanResult).slice(0, 100);
       logger.info(`[ACP] tool_result — ${callId}: ${name} → ${status} (${resultPreview})`);
 
       safeSessionUpdate(conn, {
@@ -344,7 +351,7 @@ class SmolACPAgent {
           sessionUpdate: "tool_call_update",
           toolCallId: callId,
           status,
-          rawOutput: result,
+          rawOutput: cleanResult,
         },
       });
     };
