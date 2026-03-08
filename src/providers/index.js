@@ -45,7 +45,7 @@ const PROVIDER_PRESETS = {
       baseURL: opts.baseURL || "https://api.x.ai/v1",
       providerName: "grok",
     }),
-    defaultModel: "grok-3",
+    defaultModel: "grok-4-latest",
     envKey: "XAI_API_KEY",
   },
   groq: {
