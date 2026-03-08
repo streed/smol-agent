@@ -58,20 +58,97 @@ export class OpenAICompatibleProvider extends BaseLLMProvider {
    */
   _normalizeToolCalls(toolCalls) {
     if (!toolCalls || toolCalls.length === 0) return [];
-    return toolCalls.map(tc => ({
-      function: {
-        name: tc.function.name,
-        arguments: typeof tc.function.arguments === "string"
-          ? JSON.parse(tc.function.arguments)
-          : tc.function.arguments,
-      },
-    }));
+    return toolCalls.map(tc => {
+      let args = tc.function.arguments;
+      if (typeof args === "string") {
+        try {
+          args = JSON.parse(args);
+        } catch (e) {
+          console.warn(
+            `[${this._providerName}] Failed to parse tool call arguments as JSON:`,
+            e && e.message ? e.message : e,
+            "Raw arguments:", tc.function.arguments
+          );
+          args = {};
+        }
+      }
+      return {
+        id: tc.id,
+        function: {
+          name: tc.function.name,
+          arguments: args,
+        },
+      };
+    });
+  }
+
+  /**
+   * Adapt internal agent messages to OpenAI-compatible format.
+   *
+   * Assigns stable IDs to tool calls in assistant messages and adds the
+   * matching `tool_call_id` to subsequent tool result messages so cloud
+   * providers don't reject the request.
+   *
+   * @param {Array<object>} messages
+   * @returns {Array<object>}
+   */
+  _adaptMessagesForOpenAI(messages) {
+    if (!Array.isArray(messages)) return messages;
+
+    const adapted = [];
+    // Ordered list of tool call IDs from the most recent assistant message
+    let pendingIds = [];
+    // Map from tool name → queue of IDs (for name-based correlation)
+    let pendingByName = {};
+
+    for (const msg of messages) {
+      if (msg && msg.role === "assistant" && Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0) {
+        pendingIds = [];
+        pendingByName = {};
+        const adaptedToolCalls = msg.tool_calls.map((tc, i) => {
+          const id = tc.id || `call_${Date.now()}_${i}`;
+          pendingIds.push(id);
+          const fnName = tc.function && tc.function.name;
+          if (fnName) {
+            if (!pendingByName[fnName]) pendingByName[fnName] = [];
+            pendingByName[fnName].push(id);
+          }
+          return { ...tc, id };
+        });
+        adapted.push({ ...msg, tool_calls: adaptedToolCalls });
+        continue;
+      }
+
+      if (msg && msg.role === "tool" && !msg.tool_call_id) {
+        const toolName = msg.name;
+        let chosenId;
+
+        if (toolName && pendingByName[toolName] && pendingByName[toolName].length > 0) {
+          chosenId = pendingByName[toolName].shift();
+          // Also remove from ordered queue
+          const idx = pendingIds.indexOf(chosenId);
+          if (idx !== -1) pendingIds.splice(idx, 1);
+        } else if (pendingIds.length > 0) {
+          chosenId = pendingIds.shift();
+        }
+
+        if (chosenId) {
+          adapted.push({ ...msg, tool_call_id: chosenId });
+          continue;
+        }
+      }
+
+      adapted.push(msg);
+    }
+
+    return adapted;
   }
 
   async *chatStream(messages, tools, signal, _maxTokens = DEFAULT_MAX_TOKENS, onRetry) {
+    const adaptedMessages = this._adaptMessagesForOpenAI(messages);
     const body = {
       model: this._model,
-      messages,
+      messages: adaptedMessages,
       stream: true,
     };
     if (tools && tools.length > 0) {
@@ -129,11 +206,12 @@ export class OpenAICompatibleProvider extends BaseLLMProvider {
           // Accumulate streamed tool calls
           if (delta?.tool_calls) {
             for (const tc of delta.tool_calls) {
-              const id = tc.index ?? tc.id ?? 0;
-              if (!toolCallsById.has(id)) {
-                toolCallsById.set(id, { function: { name: "", arguments: "" } });
+              const idx = tc.index ?? 0;
+              if (!toolCallsById.has(idx)) {
+                toolCallsById.set(idx, { id: tc.id || null, function: { name: "", arguments: "" } });
               }
-              const existing = toolCallsById.get(id);
+              const existing = toolCallsById.get(idx);
+              if (tc.id && !existing.id) existing.id = tc.id;
               if (tc.function?.name) existing.function.name = tc.function.name;
               if (tc.function?.arguments) existing.function.arguments += tc.function.arguments;
             }
@@ -150,11 +228,23 @@ export class OpenAICompatibleProvider extends BaseLLMProvider {
       reader.releaseLock();
     }
 
-    // Parse accumulated tool call arguments
+    // Parse accumulated tool call arguments — always produce an object
     const toolCalls = [...toolCallsById.values()].map(tc => {
-      let args = tc.function.arguments;
-      try { args = JSON.parse(args); } catch { /* not JSON */ }
-      return { function: { name: tc.function.name, arguments: args } };
+      const rawArgs = tc.function.arguments;
+      let args = {};
+      if (rawArgs && typeof rawArgs === "string") {
+        try {
+          const parsed = JSON.parse(rawArgs);
+          if (parsed && typeof parsed === "object") {
+            args = parsed;
+          }
+        } catch {
+          // Malformed JSON from provider — fall back to empty object
+        }
+      } else if (rawArgs && typeof rawArgs === "object") {
+        args = rawArgs;
+      }
+      return { id: tc.id || undefined, function: { name: tc.function.name, arguments: args } };
     });
 
     yield {
@@ -165,9 +255,10 @@ export class OpenAICompatibleProvider extends BaseLLMProvider {
   }
 
   async chatWithRetry(messages, tools, signal, _maxTokens = DEFAULT_MAX_TOKENS, onRetry) {
+    const adaptedMessages = this._adaptMessagesForOpenAI(messages);
     const body = {
       model: this._model,
-      messages,
+      messages: adaptedMessages,
       stream: false,
     };
     if (tools && tools.length > 0) {

@@ -301,6 +301,9 @@ export class Agent extends EventEmitter {
     // Set the global jail directory for all tools
     registry.setJailDirectory(this.jailDirectory);
 
+    // Expose client for backward-compatibility (e.g. TUI calls listModels(agent.client))
+    this.client = this.llmProvider.client || null;
+
     // Set up Ollama client for web search/fetch if using the Ollama provider
     if (this.llmProvider.client) {
       setSearchClient(this.llmProvider.client);
@@ -308,7 +311,7 @@ export class Agent extends EventEmitter {
     }
 
     // Set up LLM-based summarization if model is large enough (has all tools)
-    if (!coreToolsOnly) {
+    if (!this.coreToolsOnly) {
       this.contextManager.setLLMProvider(this.llmProvider);
     }
 
