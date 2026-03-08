@@ -123,6 +123,9 @@ export function getTools(coreOnly = true) {
   return out;
 }
 
+/** @deprecated Use getTools() instead. Kept for backward compatibility. */
+export const ollamaTools = getTools;
+
 /** Return names of all extended (non-core) tools currently registered. */
 export function extendedToolNames() {
   return [...tools.entries()]
@@ -171,9 +174,6 @@ export function requiresApproval(name) {
 export function list() {
   return [...tools.keys()];
 }
-
-/** @deprecated Use getTools() instead. Kept for backward compatibility. */
-export const ollamaTools = getTools;
 
 export default {
   register,

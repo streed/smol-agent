@@ -16,6 +16,7 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { execFile } from "node:child_process";
 import { setAskHandler } from "../tools/ask_user.js";
+import { formatDiff, formatReplaceDiff, formatNewFileDiff } from "./diff.js";
 import { saveSetting } from "../settings.js";
 import { listModels } from "../ollama.js";
 import { logger, readRecentLogs } from "../logger.js";
@@ -1028,7 +1029,24 @@ Reflect on these logs and determine if there's a skill worth creating. If the lo
     tui.requestRender();
   };
 
-  const onToolResult = () => {
+  const onToolResult = ({ name, result }) => {
+    // Display a git-style diff for file editing tools
+    if (result && result._display) {
+      const d = result._display;
+      let diffLines = [];
+
+      if (d.type === "new") {
+        diffLines = formatNewFileDiff(d.newContent, d.filePath);
+      } else if (d.type === "overwrite") {
+        diffLines = formatDiff(d.oldContent, d.newContent, d.filePath);
+      } else if (d.type === "replace") {
+        diffLines = formatReplaceDiff(d.fileContent, d.oldText, d.newText, d.filePath);
+      }
+
+      for (const line of diffLines) {
+        chatView.addLog(line);
+      }
+    }
     tui.requestRender();
   };
 

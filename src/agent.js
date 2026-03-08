@@ -315,6 +315,7 @@ export class Agent extends EventEmitter {
       this.contextManager.setLLMProvider(this.llmProvider);
     }
 
+
     // Always configure sub-agent for delegation (share parent's provider)
     setSubAgentConfig({
       llmProvider: this.llmProvider,
@@ -803,11 +804,22 @@ export class Agent extends EventEmitter {
             this._toolFailures.set(name, 0);
           }
 
+          // Extract _display (UI-only data) before truncation so it doesn't
+          // inflate the size estimate and so we can pass it to the UI untouched.
+          let display = null;
+          if (result && result._display) {
+            display = result._display;
+            const { _display, ...rest } = result;
+            result = rest;
+          }
+
           // Truncate large tool results to prevent context bloat (adaptive ceiling)
           const usageRatio = this.contextManager.getUsage(this.messages).percentage / 100;
           result = this.contextManager.truncateToolResult(result, usageRatio);
 
-          this.emit("tool_result", { name, result });
+          // Emit with _display attached so the UI can render a diff
+          this.emit("tool_result", { name, result: display ? { ...result, _display: display } : result });
+
           return result;
         };
 

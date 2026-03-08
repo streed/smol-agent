@@ -145,7 +145,8 @@ export class ContextManager {
     this._messageCountAtLastUpdate = 0; // Track staleness of lastPromptTokens
     this.ollamaHost = null; // Legacy: Host URL for LLM-based summarization
     this.llmModel = null;  // Legacy: Model name
-    this.llmProvider = null; // LLM provider for summarization
+    this.llmProvider = null; // LLM provider for intelligent summarization
+
   }
 
   /**

@@ -335,9 +335,12 @@ class SmolACPAgent {
       }
 
       const status = result?.error ? "failed" : "completed";
-      const resultPreview = result?.error
-        ? `error: ${result.error.slice(0, 80)}`
-        : JSON.stringify(result).slice(0, 100);
+
+      // Log without _display to keep logs readable
+      const { _display: _d, ...logResult } = result || {};
+      const resultPreview = logResult?.error
+        ? `error: ${logResult.error.slice(0, 80)}`
+        : JSON.stringify(logResult).slice(0, 100);
       logger.info(`[ACP] tool_result — ${callId}: ${name} → ${status} (${resultPreview})`);
 
       safeSessionUpdate(conn, {

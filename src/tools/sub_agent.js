@@ -77,6 +77,8 @@ register("delegate", {
       };
     }
 
+    // Use parent's provider
+
     const provider = config.llmProvider;
     const signal = config.signal;
     const onProgress = config.onProgress;
