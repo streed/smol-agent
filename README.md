@@ -20,6 +20,7 @@ smol-agent gives a local language model the tools it needs to read, write, and e
 - [Persistent Memory](#persistent-memory)
 - [Skills](#skills)
 - [Architecture](#architecture)
+- [Advanced Features](#advanced-features)
 - [Contributing](#contributing)
 - [Security](#security)
 - [License](#license)
@@ -241,6 +242,8 @@ smol-agent "add input validation to src/api.js"
 | `-d, --directory <path>` | Set working directory and jail boundary (default: cwd) |
 | `--all-tools` | Expose all tools (auto-detected for 30B+ models) |
 | `--auto-approve` | Skip approval prompts for write/command tools (alias: `--yolo`) |
+| `--approve-writes` | Auto-approve file write operations only |
+| `--approve-execute` | Auto-approve command execution only |
 | `--acp` | Run as ACP (Agent Client Protocol) server over stdio |
 | `--self-update` | Update smol-agent to the latest version |
 | `--help` | Show help |
@@ -256,6 +259,10 @@ smol-agent "add input validation to src/api.js"
 | `/reload-skills` | Reload skills from global and local directories |
 | `/skills` | List available skills |
 | `/reflect` | Analyze recent logs for skill opportunities |
+| `/architect <task>` | Run in architect mode (read-only analysis → plan → execute) |
+| `/undo` | Roll back to the last git checkpoint |
+| `/checkpoints` | List available checkpoints |
+| `/approve <category>` | Auto-approve a tool category (read/write/execute/network/safe) |
 | `exit` / `quit` | Exit the agent |
 | `Ctrl-C` | Cancel current operation / Exit on double tap |
 
@@ -290,6 +297,9 @@ The agent has access to the following tools:
 | `reflect` | Summarize work done, what went well, and areas for improvement |
 | `remember` | Save a fact/pattern/preference to persistent memory across sessions |
 | `recall` | Retrieve memories from persistent storage |
+| `memory_bank_read` | Read structured Memory Bank files (project context, tech context, progress, learnings) |
+| `memory_bank_write` | Write to structured Memory Bank files for cross-session knowledge |
+| `memory_bank_init` | Initialize Memory Bank with template files |
 | `save_context` | Save a dense summary of a directory/code area for future sessions |
 | `delegate` | Spawn a read-only sub-agent for focused research tasks |
 
@@ -312,19 +322,33 @@ The context manager keeps the system prompt and recent conversation while removi
 When the agent starts (or after `/clear`), it automatically gathers context about the current project and injects it into the system prompt. This gives the model immediate awareness of:
 
 - **Working directory** and **file tree** (top 2 levels, ignoring node_modules/.git/etc.)
+- **Repository map** — tree-sitter AST-based symbol extraction with PageRank cross-file reference ranking (inspired by [Aider](https://aider.chat)), showing the most important files and their key symbols
 - **Git status** — current branch and uncommitted changes
 - **Project type** — detected from manifest files (package.json, pyproject.toml, Cargo.toml, etc.)
 - **AGENT.md excerpt** — first 100 lines of AGENT.md if present
+- **Memory Bank** — structured cross-session knowledge (project context, tech context, progress, learnings)
+- **Shared coding rules** — automatically detects and follows rule files from other tools (`.cursorrules`, `CLAUDE.md`, `.clinerules`, etc.)
 
-This means the model already knows your project layout, language, dependencies, and available scripts before you even ask your first question — so it can give better answers with fewer tool calls.
+This means the model already knows your project layout, language, dependencies, key symbols, and available scripts before you even ask your first question — so it can give better answers with fewer tool calls.
 
 ## Persistent Memory
 
-smol-agent remembers things across sessions using three mechanisms, all stored in the `.smol-agent/` directory (gitignored by default):
+smol-agent remembers things across sessions using four mechanisms, all stored in the `.smol-agent/` directory (gitignored by default):
 
 ### Key-value memories (`.smol-agent/memory.json`)
 
 The agent can call `remember` to store facts like test commands, coding conventions, or project quirks. These are automatically loaded into the system prompt on startup. Use `recall` to retrieve them.
+
+### Memory Bank (`.smol-agent/memory-bank/`)
+
+Inspired by [Kilocode](https://github.com/kilocode/kilocode), the Memory Bank stores structured cross-session knowledge in markdown files:
+
+- **projectContext.md** — What the project does, tech stack, key goals
+- **techContext.md** — Architecture decisions, patterns, conventions
+- **progress.md** — Current status, recent changes, known issues
+- **learnings.md** — What worked, what didn't, lessons learned
+
+Use `memory_bank_init` to create the templates, then the agent updates them as it learns about your project. All Memory Bank content is automatically injected into the system prompt on startup.
 
 ### Context docs (`.smol-agent/docs/`)
 
@@ -388,18 +412,24 @@ EOF
 src/
 ├── index.js              CLI entry point, arg parsing, TUI render
 ├── agent.js              Agent loop (EventEmitter): prompt → LLM → tool calls → repeat
-├── context.js            Project context gathering (file tree, git, AGENT.md excerpt)
+│                         Includes architect mode, git checkpoints, granular auto-approve
+├── architect.js          Architect mode — read-only analysis pass → plan → execution
+├── checkpoint.js         Git stash-based checkpoints for rollback (undo support)
+├── context.js            Project context gathering (file tree, git, repo map, memory bank)
 ├── context-manager.js    Token counting, context pruning, message summarization
 ├── logger.js             Logging with configurable levels
+├── memory-bank.js        Structured cross-session knowledge (Kilocode-inspired)
 ├── ollama.js             Thin wrapper around the ollama npm package
 ├── path-utils.js         Path resolution and jail security
+├── repo-map.js           Tree-sitter AST symbol extraction with PageRank ranking (Aider-inspired)
 ├── skills.js             Skill loading and frontmatter parsing
+├── ts-lint.js            Tree-sitter based syntax checking after edits (Aider-inspired)
 ├── ui/
-│   ├── App.js            Terminal UI — message log, status, input
+│   ├── App.js            Terminal UI — message log, status, input, slash commands
 │   └── markdown.js       Rich markdown rendering for terminal output
 └── tools/
-    ├── registry.js       Tool registration and dispatch
-    ├── file_tools.js     read_file, write_file, replace_in_file
+    ├── registry.js       Tool registration, dispatch, and per-category approval
+    ├── file_tools.js     read_file, write_file, replace_in_file (with fuzzy matching and lint)
     ├── list_files.js     Glob-based file listing
     ├── grep.js           Regex search across files
     ├── run_command.js    Shell command execution
@@ -410,16 +440,55 @@ src/
     ├── plan_tools.js     Plan management tools
     ├── save_plan.js      Plan persistence utilities
     ├── reflection.js     Work reflection and summarization
-    ├── memory.js         Persistent remember/recall across sessions
+    ├── memory.js         Persistent remember/recall and Memory Bank tools
     ├── context_docs.js   save_context tool for directory summaries
     └── sub_agent.js      Delegate tool for focused sub-agent tasks
 ```
 
 Each tool file self-registers with the registry on import. The agent imports them all, and the registry serializes them into the format Ollama expects for tool-calling.
 
-On first run, `context.js` gathers a snapshot of the project (file tree, git state, AGENT.md excerpt) and appends it to the system prompt. This gives the model grounding in the project before any tool calls happen.
+On first run, `context.js` gathers a snapshot of the project (file tree, repo map, git state, AGENT.md excerpt, memory bank) and appends it to the system prompt. This gives the model grounding in the project before any tool calls happen.
 
 The terminal UI subscribes to `tool_call`, `tool_result`, `response`, and `error` events emitted by the agent, rendering tool activity in real time. The `ask_user` tool is wired through a promise bridge so the UI collects the answer inline.
+
+## Advanced Features
+
+### Architect Mode (inspired by Aider/Kilocode)
+
+Architect mode uses a two-pass approach for complex tasks:
+
+1. **Analysis pass** — The agent reads files and analyzes the codebase in read-only mode, producing an implementation plan
+2. **Execution pass** — The plan is handed to an editor pass that makes the actual changes
+
+Use `/architect <task>` to run a task in architect mode, or `/architect` to toggle it for the next prompt.
+
+### Git Checkpoints
+
+The agent automatically creates git stash-based checkpoints before each operation. Use `/undo` to roll back to the previous checkpoint, or `/checkpoints` to list available restore points.
+
+### Repository Map with PageRank (inspired by Aider)
+
+The repo map uses tree-sitter to parse source files and extract symbols (functions, classes, types, exports) across 7 languages (JS/TS, Python, Go, Rust, Java, Ruby). Cross-file references are analyzed using a directed graph, and files are ranked by PageRank score — surfacing the most important and interconnected files in the codebase.
+
+### Fuzzy Diff Matching (inspired by Kilocode)
+
+When `replace_in_file` can't find an exact match, it falls back through:
+
+1. **Whitespace-normalized matching** — ignores tab/space differences
+2. **Fuzzy matching** (80% similarity threshold) — finds the best approximate match using line-level similarity scoring
+3. **Hint-based error** — suggests the closest matching line if no fuzzy match is found
+
+### Tree-sitter Syntax Lint (inspired by Aider)
+
+After every `write_file` and `replace_in_file`, the modified file is parsed with tree-sitter to detect syntax errors. If ERROR nodes are found in the AST, a `syntaxWarning` is included in the tool result, alerting the agent to fix the issue immediately.
+
+### Granular Auto-Approve
+
+Instead of all-or-nothing `--auto-approve`, you can approve specific categories:
+
+- `--approve-writes` — auto-approve file write operations
+- `--approve-execute` — auto-approve command execution
+- `/approve <category>` — approve a category interactively (read/write/execute/network/safe)
 
 ## Model Benchmark
 
