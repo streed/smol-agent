@@ -1,12 +1,14 @@
 /**
  * Cross-Agent Communication Tools
  *
- * Exposes the inbox/letter protocol to agents as tool calls:
- *   - send_letter: Send a work request to another agent's inbox
+ * Exposes the inbox/letter protocol and agent registry to agents as tool calls:
+ *   - send_letter: Send a work request to another agent's inbox (supports name lookup)
  *   - check_reply: Check if a reply has arrived for a sent letter
  *   - read_inbox: Read all letters in this agent's inbox
  *   - read_outbox: Read letters this agent has sent
  *   - reply_to_letter: Send a response back to a requesting agent
+ *   - list_agents: List all registered agents in the global registry
+ *   - link_repos: Create a relationship between two repos in the registry
  */
 
 import { register } from "./registry.js";
@@ -18,6 +20,13 @@ import {
   sendReply,
   parseLetter,
 } from "../cross-agent.js";
+import {
+  findAgent,
+  listAgents,
+  registerAgent,
+  addRelation,
+  getRelatedAgents,
+} from "../agent-registry.js";
 import { logger } from "../logger.js";
 import fs from "node:fs";
 import path from "node:path";
@@ -27,15 +36,16 @@ import path from "node:path";
 register("send_letter", {
   description:
     "Send a work request letter to another agent working in a different repository. " +
-    "The letter describes what you need (e.g., a new API endpoint, new fields in a response). " +
-    "The target agent will pick up the letter from its inbox and do the work.",
+    "The 'to' field can be an agent name (looked up in the global registry) or an absolute repo path. " +
+    "Use list_agents first to see available agents.",
   parameters: {
     type: "object",
     properties: {
       to: {
         type: "string",
         description:
-          "Absolute path to the target agent's repository (e.g., /home/user/backend-api)",
+          "Agent name (e.g., 'backend-api') or absolute path to the target repo. " +
+          "Names are resolved via the global agent registry.",
       },
       title: {
         type: "string",
@@ -68,9 +78,22 @@ register("send_letter", {
   },
   async execute(args, { cwd }) {
     try {
+      // Resolve 'to' — try registry lookup first, then treat as path
+      let toPath = args.to;
+      if (!path.isAbsolute(toPath)) {
+        const agent = findAgent(toPath);
+        if (agent) {
+          toPath = agent.path;
+        } else {
+          return {
+            error: `Agent "${args.to}" not found in registry. Use list_agents to see available agents, or provide an absolute path.`,
+          };
+        }
+      }
+
       const result = sendLetter({
         from: cwd,
-        to: args.to,
+        to: toPath,
         title: args.title,
         body: args.body,
         acceptanceCriteria: args.acceptance_criteria || [],
@@ -81,7 +104,8 @@ register("send_letter", {
       return {
         success: true,
         letter_id: result.id,
-        message: `Letter sent to ${args.to}. Letter ID: ${result.id}. Use check_reply with this ID to see when the work is done.`,
+        delivered_to: toPath,
+        message: `Letter sent to ${toPath}. Letter ID: ${result.id}. Use check_reply with this ID to see when the work is done.`,
       };
     } catch (err) {
       logger.error(`send_letter failed: ${err.message}`);
@@ -291,6 +315,123 @@ register("reply_to_letter", {
       };
     } catch (err) {
       logger.error(`reply_to_letter failed: ${err.message}`);
+      return { error: err.message };
+    }
+  },
+});
+
+// ── list_agents ───────────────────────────────────────────────────────
+
+register("list_agents", {
+  description:
+    "List all agents registered in the global registry. " +
+    "Shows agent names, paths, roles, and relationships. " +
+    "Use this to discover agents you can send letters to.",
+  parameters: {
+    type: "object",
+    properties: {
+      role: {
+        type: "string",
+        description: "Filter by role (e.g., 'backend', 'frontend')",
+      },
+    },
+  },
+  async execute(args, { cwd }) {
+    try {
+      const filter = {};
+      if (args.role) filter.role = args.role;
+
+      const agents = listAgents(filter);
+
+      if (agents.length === 0) {
+        return {
+          agents: [],
+          message: "No agents registered. Agents self-register when they start up.",
+        };
+      }
+
+      // Enrich with relationship info
+      const enriched = agents.map((a) => {
+        const related = getRelatedAgents(a.path);
+        return {
+          name: a.name,
+          path: a.path,
+          role: a.role || "(none)",
+          description: a.description || "(none)",
+          last_seen: a.lastSeen,
+          relations: related.map((r) => ({
+            name: r.agent.name,
+            path: r.agent.path,
+            type: r.type,
+            direction: r.direction,
+          })),
+        };
+      });
+
+      return { count: enriched.length, agents: enriched };
+    } catch (err) {
+      logger.error(`list_agents failed: ${err.message}`);
+      return { error: err.message };
+    }
+  },
+});
+
+// ── link_repos ────────────────────────────────────────────────────────
+
+register("link_repos", {
+  description:
+    "Create a relationship between two repos in the global agent registry. " +
+    "This helps agents understand which repos are related. " +
+    "Both repos must be registered (agents self-register on startup).",
+  parameters: {
+    type: "object",
+    properties: {
+      from: {
+        type: "string",
+        description:
+          "Source agent name or repo path (e.g., 'frontend' or '/path/to/frontend')",
+      },
+      to: {
+        type: "string",
+        description:
+          "Target agent name or repo path (e.g., 'backend-api' or '/path/to/backend')",
+      },
+      type: {
+        type: "string",
+        enum: ["depends-on", "serves", "consumes", "related"],
+        description:
+          "Relationship type: depends-on (from needs to), serves (from provides to to), consumes (from uses to's output), related (general)",
+      },
+    },
+    required: ["from", "to", "type"],
+  },
+  async execute(args) {
+    try {
+      // Resolve names to paths
+      const resolveAgent = (query) => {
+        if (path.isAbsolute(query)) return query;
+        const agent = findAgent(query);
+        if (agent) return agent.path;
+        return null;
+      };
+
+      const fromPath = resolveAgent(args.from);
+      if (!fromPath) {
+        return { error: `Agent "${args.from}" not found in registry.` };
+      }
+      const toPath = resolveAgent(args.to);
+      if (!toPath) {
+        return { error: `Agent "${args.to}" not found in registry.` };
+      }
+
+      addRelation(fromPath, toPath, args.type);
+
+      return {
+        success: true,
+        message: `Linked: ${args.from} --${args.type}--> ${args.to}`,
+      };
+    } catch (err) {
+      logger.error(`link_repos failed: ${err.message}`);
       return { error: err.message };
     }
   },

@@ -17,6 +17,7 @@ import {
 } from "./sessions.js";
 import { architectPass, formatPlanForEditor } from "./architect.js";
 import { createCheckpoint, rollbackToCheckpoint, listCheckpoints, cleanupCheckpoints } from "./checkpoint.js";
+import { touchAgent, detectRepoMetadata, registerAgent } from "./agent-registry.js";
 
 // Import all tools so they self-register
 import "./tools/run_command.js";
@@ -437,6 +438,18 @@ export class Agent extends EventEmitter {
 
     // Ensure tiktoken is ready for accurate token counting
     await ensureTiktoken();
+
+    // Self-register in the global agent registry so other agents can discover us
+    try {
+      const meta = detectRepoMetadata(this.jailDirectory);
+      registerAgent({
+        repoPath: this.jailDirectory,
+        name: meta.name,
+        description: meta.description,
+      });
+    } catch (err) {
+      logger.debug(`Agent registry: ${err.message}`);
+    }
 
     let contextBlock = "";
     try {

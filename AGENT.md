@@ -233,15 +233,25 @@ Letters use YAML frontmatter + markdown body:
 - **Frontmatter**: id, type (request/response), title, from, to, in_reply_to, status, priority, created_at
 - **Body sections**: Body, Acceptance Criteria, Context (requests) or Changes Made, API Contract, Notes (responses)
 
+### Global Agent Registry
+
+Agents self-register in `~/.config/smol-agent/agents.json` on startup, auto-detecting name/description from `package.json`, `pyproject.toml`, `Cargo.toml`, or `go.mod`. This allows agents to discover each other by name instead of requiring absolute paths.
+
+Registry entries include: name, path, role, description, relations (e.g., depends-on, serves), lastSeen timestamp.
+
+The `send_letter` tool resolves agent names via the registry, so you can write `send_letter({ to: "backend-api", ... })` instead of providing a full path.
+
 ### Tools
 
 | Tool | Description | Category |
 |------|-------------|----------|
-| `send_letter` | Send a work request to another agent's inbox | network |
+| `send_letter` | Send a work request to another agent's inbox (supports name lookup) | network |
 | `check_reply` | Check if a reply arrived for a sent letter | safe |
 | `read_inbox` | Read letters in this agent's inbox | safe |
 | `read_outbox` | Read sent letters and their reply status | safe |
 | `reply_to_letter` | Reply to an incoming request after completing work | write |
+| `list_agents` | List all registered agents (discover who to send letters to) | safe |
+| `link_repos` | Create a relationship between two repos (depends-on, serves, etc.) | safe |
 
 ### Workflow
 
@@ -251,21 +261,25 @@ Letters use YAML frontmatter + markdown body:
 4. Response is delivered back to the frontend repo's inbox
 5. **Frontend agent** uses `check_reply` to read the response and continue
 
-### CLI
+### Inbox listening is opt-in
+
+Agents **ignore** inbox letters by default. To process incoming letters, you must explicitly run the inbox watcher:
 
 ```bash
-# Run the inbox watcher (monitors for incoming letters)
+# Run the inbox watcher (opt-in, monitors for incoming letters)
 smol-agent --watch-inbox -d /path/to/repo -p anthropic
-
-# Letters are processed automatically with --auto-approve
 ```
+
+The watcher is a long-running process that monitors `.smol-agent/inbox/` for new `.letter.md` files and spawns an agent to handle each one. Without `--watch-inbox`, agents can still _send_ letters and _read_ their inbox, but won't automatically process incoming requests.
 
 ### Source files
 
 | File | Purpose |
 |------|---------|
 | `src/cross-agent.js` | Core protocol: letter serialization, inbox/outbox ops, watcher, agent spawning |
-| `src/tools/cross_agent.js` | Tool registrations: send_letter, check_reply, read_inbox, read_outbox, reply_to_letter |
+| `src/agent-registry.js` | Global agent registry: registration, discovery, relations, metadata detection |
+| `src/tools/cross_agent.js` | Tool registrations: send_letter, check_reply, read_inbox, read_outbox, reply_to_letter, list_agents, link_repos |
 | `test/unit/cross-agent.test.js` | Unit tests (16 tests covering serialization, ops, e2e workflow) |
+| `test/unit/agent-registry.test.js` | Unit tests (24 tests covering registration, discovery, relations, metadata) |
 
 

@@ -70,6 +70,8 @@ const TOOL_CATEGORIES = {
   read_inbox: "safe",
   read_outbox: "safe",
   reply_to_letter: "write",
+  list_agents: "safe",
+  link_repos: "safe",
 };
 
 /**
