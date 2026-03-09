@@ -354,7 +354,7 @@ class ChatView {
 
     // Place ❯ prompt on first content line of editor (after top border)
     if (editorLines.length > 1) {
-      editorLines[1] = truncateToWidth(chalk.green.bold("❯ ") + editorLines[1].slice(1), width);
+      editorLines[1] = truncateToWidth(chalk.green.bold("❯ ") + editorLines[1].slice(1), width, "");
     }
 
     const allLines = [...outputLines, ...statusLines, ...editorLines, ...footerLines];
