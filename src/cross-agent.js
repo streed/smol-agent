@@ -60,10 +60,15 @@ export function serializeLetter({
   createdAt,
   body,
   acceptanceCriteria = [],
+  verificationSteps = [],
   context = "",
 }) {
   const criteria = acceptanceCriteria.length > 0
     ? acceptanceCriteria.map((c) => `- ${c}`).join("\n")
+    : "- (none specified)";
+
+  const verification = verificationSteps.length > 0
+    ? verificationSteps.map((v) => `- ${v}`).join("\n")
     : "- (none specified)";
 
   return `---
@@ -88,6 +93,10 @@ ${body}
 
 ${criteria}
 
+## Verification Steps
+
+${verification}
+
 ## Context
 
 ${context || "(none)"}
@@ -106,6 +115,7 @@ export function serializeResponse({
   status = "completed",
   createdAt,
   changesMade = "",
+  verificationResults = "",
   apiContract = "",
   notes = "",
 }) {
@@ -126,6 +136,10 @@ created_at: ${createdAt}
 ## Changes Made
 
 ${changesMade || "(none)"}
+
+## Verification Results
+
+${verificationResults || "(none)"}
 
 ## API Contract / Interface
 
@@ -172,7 +186,7 @@ export function parseLetter(markdown) {
 
   // Parse acceptance criteria
   const criteriaMatch = markdown.match(
-    /## Acceptance Criteria\s*\n([\s\S]*?)(?=\n## Context|\n## |$)/,
+    /## Acceptance Criteria\s*\n([\s\S]*?)(?=\n## Verification Steps|\n## Context|\n## |$)/,
   );
   if (criteriaMatch) {
     result.acceptanceCriteria = criteriaMatch[1]
@@ -185,6 +199,21 @@ export function parseLetter(markdown) {
     result.acceptanceCriteria = [];
   }
 
+  // Parse verification steps (for request letters)
+  const verStepsMatch = markdown.match(
+    /## Verification Steps\s*\n([\s\S]*?)(?=\n## Context|\n## |$)/,
+  );
+  if (verStepsMatch) {
+    result.verificationSteps = verStepsMatch[1]
+      .trim()
+      .split("\n")
+      .filter((l) => l.startsWith("- "))
+      .map((l) => l.replace(/^- /, "").trim())
+      .filter((l) => l !== "(none specified)");
+  } else {
+    result.verificationSteps = [];
+  }
+
   // Parse context
   const ctxMatch = markdown.match(/## Context\s*\n([\s\S]*?)(?=\n## |$)/);
   result.context = ctxMatch ? ctxMatch[1].trim() : "";
@@ -192,9 +221,15 @@ export function parseLetter(markdown) {
 
   // Parse response-specific sections
   const changesMatch = markdown.match(
-    /## Changes Made\s*\n([\s\S]*?)(?=\n## API Contract)/,
+    /## Changes Made\s*\n([\s\S]*?)(?=\n## Verification Results|\n## API Contract)/,
   );
   result.changesMade = changesMatch ? changesMatch[1].trim() : "";
+
+  // Parse verification results (for response letters)
+  const verResultsMatch = markdown.match(
+    /## Verification Results\s*\n([\s\S]*?)(?=\n## API Contract)/,
+  );
+  result.verificationResults = verResultsMatch ? verResultsMatch[1].trim() : "";
 
   const apiMatch = markdown.match(
     /## API Contract \/ Interface\s*\n([\s\S]*?)(?=\n## Notes)/,
@@ -205,11 +240,55 @@ export function parseLetter(markdown) {
   result.notes = notesMatch ? notesMatch[1].trim() : "";
 
   // Normalize "(none)" values
-  for (const key of ["changesMade", "apiContract", "notes", "context", "body"]) {
+  for (const key of ["changesMade", "verificationResults", "apiContract", "notes", "context", "body"]) {
     if (result[key] === "(none)") result[key] = "";
   }
 
   return result;
+}
+
+// ── Inbox cleanup ─────────────────────────────────────────────────────
+
+/**
+ * Clear all pending letters from a repo's inbox.
+ * Called on agent startup so the agent only processes new work, not stale requests.
+ * Letters are moved to a "cleared" subdirectory for auditing rather than deleted.
+ *
+ * @param {string} repoPath
+ * @returns {number} Number of letters cleared
+ */
+export function clearStaleInbox(repoPath) {
+  const inboxDir = path.join(path.resolve(repoPath), INBOX_DIR);
+  if (!fs.existsSync(inboxDir)) return 0;
+
+  const clearedDir = path.join(inboxDir, "cleared");
+  fs.mkdirSync(clearedDir, { recursive: true });
+
+  const files = fs.readdirSync(inboxDir).filter(
+    (f) => f.endsWith(".letter.md"),
+  );
+
+  let count = 0;
+  for (const file of files) {
+    const filePath = path.join(inboxDir, file);
+    try {
+      const content = fs.readFileSync(filePath, "utf-8");
+      const letter = parseLetter(content);
+      if (letter.status === "pending") {
+        // Move to cleared directory
+        fs.renameSync(filePath, path.join(clearedDir, file));
+        count++;
+        logger.info(`Cleared stale letter: ${file}`);
+      }
+    } catch (err) {
+      logger.warn(`Failed to process stale letter ${file}: ${err.message}`);
+    }
+  }
+
+  if (count > 0) {
+    logger.info(`Cleared ${count} stale letter(s) from inbox on startup`);
+  }
+  return count;
 }
 
 // ── Core operations ───────────────────────────────────────────────────
@@ -233,6 +312,7 @@ export function sendLetter({
   title,
   body,
   acceptanceCriteria = [],
+  verificationSteps = [],
   context = "",
   priority = "medium",
 }) {
@@ -256,6 +336,7 @@ export function sendLetter({
     createdAt,
     body,
     acceptanceCriteria,
+    verificationSteps,
     context,
   });
 
@@ -288,6 +369,7 @@ export function sendReply({
   repoPath,
   originalLetter,
   changesMade = "",
+  verificationResults = "",
   apiContract = "",
   notes = "",
   status = "completed",
@@ -305,6 +387,7 @@ export function sendReply({
     status,
     createdAt,
     changesMade,
+    verificationResults,
     apiContract,
     notes,
   });
@@ -420,7 +503,15 @@ export function checkForReply(repoPath, letterId) {
  * @param {AbortSignal} [opts.signal] - Signal to cancel the wait
  * @returns {Promise<object>} Parsed response letter
  */
-export function waitForReply({ repoPath, letterId, timeoutMs = 300_000, signal }) {
+/**
+ * Default reply timeout: 10 minutes, configurable via SMOL_AGENT_REPLY_TIMEOUT_MS env var.
+ */
+export const DEFAULT_REPLY_TIMEOUT_MS = parseInt(
+  process.env.SMOL_AGENT_REPLY_TIMEOUT_MS || "600000",
+  10,
+);
+
+export function waitForReply({ repoPath, letterId, timeoutMs = DEFAULT_REPLY_TIMEOUT_MS, signal }) {
   // Check if the reply already exists
   const existing = checkForReply(repoPath, letterId);
   if (existing) return Promise.resolve(existing);
@@ -571,8 +662,8 @@ export function watchInbox({
 
   logger.info(`Watching inbox: ${inboxDir}`);
 
-  // Process any existing pending letters on startup
-  processExistingLetters();
+  // Clear stale letters on startup — agents only process new work
+  clearStaleInbox(path.resolve(repoPath));
 
   const watcher = fs.watch(inboxDir, async (eventType, filename) => {
     if (!filename || !filename.endsWith(".letter.md")) return;
@@ -613,42 +704,6 @@ export function watchInbox({
 
   if (signal) {
     signal.addEventListener("abort", () => watcher.close(), { once: true });
-  }
-
-  async function processExistingLetters() {
-    const pending = readInbox(path.resolve(repoPath), {
-      type: "request",
-      status: "pending",
-    });
-
-    const tasks = pending
-      .filter((letter) => {
-        if (signal?.aborted) return false;
-        const filename = `${letter.id}.letter.md`;
-        if (processing.has(filename)) return false;
-        processing.add(filename);
-        onLetterReceived?.(letter);
-        return true;
-      })
-      .map(async (letter) => {
-        try {
-          await processLetter({
-            repoPath: path.resolve(repoPath),
-            letter,
-            provider,
-            model,
-            apiKey,
-          });
-          onAgentComplete?.(letter, null);
-        } catch (err) {
-          logger.error(`Failed to process letter ${letter.id}: ${err.message}`);
-          onAgentComplete?.(letter, err);
-        } finally {
-          processing.delete(`${letter.id}.letter.md`);
-        }
-      });
-
-    await Promise.all(tasks);
   }
 
   return {
@@ -703,6 +758,9 @@ export function processLetter({
     letter.acceptanceCriteria?.length > 0
       ? `**Acceptance Criteria**:\n${letter.acceptanceCriteria.map((c) => `- ${c}`).join("\n")}`
       : "",
+    letter.verificationSteps?.length > 0
+      ? `**Verification Steps** (you MUST run these before replying):\n${letter.verificationSteps.map((v) => `- ${v}`).join("\n")}`
+      : "",
     letter.context ? `**Context**: ${letter.context}` : "",
     ``,
     `Complete the requested work, then use the **reply_to_letter** tool to send a response back.`,
@@ -710,8 +768,12 @@ export function processLetter({
     `When calling reply_to_letter, provide:`,
     `- letter_id: "${letter.id}"`,
     `- changes_made: a summary of what you changed`,
+    `- verification_results: the output/results of running the verification steps (REQUIRED if verification steps were provided)`,
     `- api_contract: any API surface / interfaces the requesting agent needs to know about`,
     `- notes: any additional context or caveats`,
+    ``,
+    `IMPORTANT: If verification steps were provided, you MUST run them and include the results in verification_results.`,
+    `If any verification step fails, set status to "failed" and describe what failed.`,
     ``,
     `Commit your changes before sending the reply.`,
     `Focus only on the requested work. Do not modify unrelated code.`,

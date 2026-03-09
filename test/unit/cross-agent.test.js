@@ -11,6 +11,7 @@ import {
   checkForReply,
   readInbox,
   readOutbox,
+  clearStaleInbox,
 } from "../../src/cross-agent.js";
 
 describe("cross-agent protocol", () => {
@@ -45,6 +46,10 @@ describe("cross-agent protocol", () => {
           "GET /users returns avatar_url field",
           "avatar_url is a string or null",
         ],
+        verificationSteps: [
+          "Run npm test",
+          "curl GET /users and verify avatar_url field exists",
+        ],
         context: "We need this for the new profile page component.",
       };
 
@@ -65,6 +70,10 @@ describe("cross-agent protocol", () => {
       expect(parsed.acceptanceCriteria).toEqual([
         "GET /users returns avatar_url field",
         "avatar_url is a string or null",
+      ]);
+      expect(parsed.verificationSteps).toEqual([
+        "Run npm test",
+        "curl GET /users and verify avatar_url field exists",
       ]);
       expect(parsed.context).toBe(
         "We need this for the new profile page component.",
@@ -112,6 +121,8 @@ describe("cross-agent protocol", () => {
         createdAt: "2025-01-15T12:00:00.000Z",
         changesMade:
           "Added avatar_url field to User model and GET /users response.",
+        verificationResults:
+          "npm test: 42 tests passed, 0 failed. curl GET /users returns avatar_url field.",
         apiContract:
           "GET /users now returns { id, name, email, avatar_url: string | null }",
         notes: "Migration needed: run `npm run migrate`",
@@ -126,6 +137,9 @@ describe("cross-agent protocol", () => {
       expect(parsed.status).toBe("completed");
       expect(parsed.changesMade).toBe(
         "Added avatar_url field to User model and GET /users response.",
+      );
+      expect(parsed.verificationResults).toBe(
+        "npm test: 42 tests passed, 0 failed. curl GET /users returns avatar_url field.",
       );
       expect(parsed.apiContract).toBe(
         "GET /users now returns { id, name, email, avatar_url: string | null }",
@@ -142,11 +156,13 @@ describe("cross-agent protocol", () => {
         inReplyTo: "l1",
         createdAt: "2025-01-01T00:00:00Z",
         changesMade: "",
+        verificationResults: "",
         apiContract: "",
         notes: "",
       });
       const parsed = parseLetter(markdown);
       expect(parsed.changesMade).toBe("");
+      expect(parsed.verificationResults).toBe("");
       expect(parsed.apiContract).toBe("");
       expect(parsed.notes).toBe("");
     });
@@ -344,11 +360,109 @@ describe("cross-agent protocol", () => {
     });
   });
 
+  // ── Verification fields ──────────────────────────────────────────────
+
+  describe("verification steps and results", () => {
+    it("includes verification steps in letter and results in response", () => {
+      const { id } = sendLetter({
+        from: repoA,
+        to: repoB,
+        title: "Add endpoint",
+        body: "Add GET /health endpoint",
+        verificationSteps: [
+          "Run npm test",
+          "curl GET /health returns 200",
+        ],
+      });
+
+      const inbox = readInbox(repoB, { type: "request" });
+      expect(inbox[0].verificationSteps).toEqual([
+        "Run npm test",
+        "curl GET /health returns 200",
+      ]);
+
+      sendReply({
+        repoPath: repoB,
+        originalLetter: inbox[0],
+        changesMade: "Added /health endpoint",
+        verificationResults: "npm test: all passed. curl /health: 200 OK",
+      });
+
+      const reply = checkForReply(repoA, id);
+      expect(reply.verificationResults).toBe(
+        "npm test: all passed. curl /health: 200 OK",
+      );
+    });
+
+    it("handles empty verification steps", () => {
+      const markdown = serializeLetter({
+        id: "test-id",
+        title: "Test",
+        from: "/a",
+        to: "/b",
+        createdAt: "2025-01-01T00:00:00Z",
+        body: "Do something",
+        verificationSteps: [],
+      });
+      const parsed = parseLetter(markdown);
+      expect(parsed.verificationSteps).toEqual([]);
+    });
+  });
+
+  // ── Inbox cleanup ──────────────────────────────────────────────────
+
+  describe("clearStaleInbox", () => {
+    it("moves pending letters to cleared directory", () => {
+      sendLetter({
+        from: repoA,
+        to: repoB,
+        title: "Stale request",
+        body: "Old work",
+      });
+
+      const before = readInbox(repoB, { type: "request", status: "pending" });
+      expect(before).toHaveLength(1);
+
+      const cleared = clearStaleInbox(repoB);
+      expect(cleared).toBe(1);
+
+      const after = readInbox(repoB, { type: "request", status: "pending" });
+      expect(after).toHaveLength(0);
+
+      // Check cleared directory exists
+      const clearedDir = path.join(repoB, ".smol-agent/inbox/cleared");
+      const files = fs.readdirSync(clearedDir);
+      expect(files).toHaveLength(1);
+    });
+
+    it("does not clear in-progress or completed letters", () => {
+      const { id } = sendLetter({
+        from: repoA,
+        to: repoB,
+        title: "Active request",
+        body: "In progress work",
+      });
+
+      // Manually mark as in-progress
+      const letterPath = path.join(repoB, ".smol-agent/inbox", `${id}.letter.md`);
+      let content = fs.readFileSync(letterPath, "utf-8");
+      content = content.replace(/^status: pending$/m, "status: in-progress");
+      fs.writeFileSync(letterPath, content);
+
+      const cleared = clearStaleInbox(repoB);
+      expect(cleared).toBe(0);
+    });
+
+    it("returns 0 for empty inbox", () => {
+      expect(clearStaleInbox(repoB)).toBe(0);
+    });
+  });
+
   // ── Full workflow ───────────────────────────────────────────────────
 
   describe("end-to-end workflow", () => {
-    it("simulates frontend requesting backend work", () => {
-      // 1. Frontend sends a letter to backend
+    it("simulates frontend requesting backend work with verification", () => {
+      // 1. Frontend sends a letter to backend with verification steps
       const { id } = sendLetter({
         from: repoA,
         to: repoB,
@@ -363,6 +477,10 @@ describe("cross-agent protocol", () => {
           "Response includes total count",
           "Default per_page is 20",
         ],
+        verificationSteps: [
+          "Run npm test",
+          "curl GET /products?page=1&per_page=10 returns paginated JSON",
+        ],
         context: "Frontend ProductList component needs this for infinite scroll.",
         priority: "high",
       });
@@ -375,8 +493,9 @@ describe("cross-agent protocol", () => {
       expect(backendInbox).toHaveLength(1);
       expect(backendInbox[0].title).toBe("Add pagination to GET /products");
       expect(backendInbox[0].priority).toBe("high");
+      expect(backendInbox[0].verificationSteps).toHaveLength(2);
 
-      // 3. Backend does the work and replies
+      // 3. Backend does the work, verifies, and replies
       sendReply({
         repoPath: repoB,
         originalLetter: backendInbox[0],
@@ -384,6 +503,10 @@ describe("cross-agent protocol", () => {
           "- Added pagination to ProductController.list()",
           "- Added page/per_page query param parsing",
           "- Updated product repository with offset/limit support",
+        ].join("\n"),
+        verificationResults: [
+          "npm test: 48 tests passed, 0 failed",
+          "curl GET /products?page=1&per_page=10: returns {total: 150, page: 1, per_page: 10, data: [...]}",
         ].join("\n"),
         apiContract: [
           "GET /products?page=1&per_page=10",
@@ -404,6 +527,7 @@ describe("cross-agent protocol", () => {
       expect(reply.status).toBe("completed");
       expect(reply.apiContract).toContain("per_page");
       expect(reply.changesMade).toContain("ProductController");
+      expect(reply.verificationResults).toContain("48 tests passed");
 
       // 5. Frontend outbox shows the sent letter
       const outbox = readOutbox(repoA);

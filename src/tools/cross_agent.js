@@ -22,6 +22,7 @@ import {
   sendReply,
   parseLetter,
   waitForReply,
+  DEFAULT_REPLY_TIMEOUT_MS,
 } from "../cross-agent.js";
 import {
   findAgent,
@@ -42,7 +43,9 @@ register("send_letter", {
   description:
     "Send a work request letter to another agent working in a different repository. " +
     "The 'to' field can be an agent name (looked up in the global registry) or an absolute repo path. " +
-    "Use list_agents first to see available agents.",
+    "Only agents with an existing relationship can communicate. If you don't know which agent to " +
+    "contact, use find_agent_for_task to discover the right one (it will auto-create a relationship). " +
+    "Use list_agents first to see available agents and their relationships.",
   parameters: {
     type: "object",
     properties: {
@@ -68,6 +71,14 @@ register("send_letter", {
         description:
           "List of criteria that must be met for the work to be considered done",
       },
+      verification_steps: {
+        type: "array",
+        items: { type: "string" },
+        description:
+          "List of concrete verification steps the receiving agent MUST run to prove the work is done " +
+          "(e.g., 'Run npm test', 'curl GET /users and verify avatar_url field exists'). " +
+          "The receiving agent will include verification results in their reply.",
+      },
       context: {
         type: "string",
         description:
@@ -81,14 +92,15 @@ register("send_letter", {
       wait_for_reply: {
         type: "boolean",
         description:
-          "If true, block until the other agent sends a reply (up to 5 minutes). " +
+          `If true, block until the other agent sends a reply (up to ${DEFAULT_REPLY_TIMEOUT_MS / 60000} minutes). ` +
           "If false (default), return immediately with a letter_id you can poll with check_reply. " +
           "Note: you'll also be notified automatically when a reply arrives.",
       },
       wait_timeout_ms: {
         type: "number",
         description:
-          "Timeout in milliseconds when wait_for_reply is true (default: 300000 = 5 minutes)",
+          `Timeout in milliseconds when wait_for_reply is true (default: ${DEFAULT_REPLY_TIMEOUT_MS}). ` +
+          "Configurable via SMOL_AGENT_REPLY_TIMEOUT_MS env var.",
       },
     },
     required: ["to", "title", "body"],
@@ -103,9 +115,21 @@ register("send_letter", {
           toPath = agent.path;
         } else {
           return {
-            error: `Agent "${args.to}" not found in registry. Use list_agents to see available agents, or provide an absolute path.`,
+            error: `Agent "${args.to}" not found in registry. Use find_agent_for_task to discover the right agent, or list_agents to see all available agents.`,
           };
         }
+      }
+
+      // Relationship gating: only allow communication between related agents
+      const related = getRelatedAgents(cwd);
+      const hasRelationship = related.some((r) => r.agent.path === path.resolve(toPath));
+      if (!hasRelationship) {
+        return {
+          error: `No relationship exists between this repo and "${args.to}". ` +
+            `Agents can only communicate with related agents. ` +
+            `Use find_agent_for_task to discover and auto-link the right agent, ` +
+            `or use link_repos to create a relationship first.`,
+        };
       }
 
       const result = sendLetter({
@@ -114,6 +138,7 @@ register("send_letter", {
         title: args.title,
         body: args.body,
         acceptanceCriteria: args.acceptance_criteria || [],
+        verificationSteps: args.verification_steps || [],
         context: args.context || "",
         priority: args.priority || "medium",
       });
@@ -124,7 +149,7 @@ register("send_letter", {
           const reply = await waitForReply({
             repoPath: cwd,
             letterId: result.id,
-            timeoutMs: args.wait_timeout_ms || 300_000,
+            timeoutMs: args.wait_timeout_ms || DEFAULT_REPLY_TIMEOUT_MS,
           });
           return {
             success: true,
@@ -134,6 +159,7 @@ register("send_letter", {
               status: reply.status || "completed",
               title: reply.title,
               changes_made: reply.changesMade,
+              verification_results: reply.verificationResults,
               api_contract: reply.apiContract,
               notes: reply.notes,
               completed_at: reply.createdAt,
@@ -197,6 +223,7 @@ register("check_reply", {
         status: reply.status || "completed",
         title: reply.title,
         changes_made: reply.changesMade,
+        verification_results: reply.verificationResults || undefined,
         api_contract: reply.apiContract,
         notes: reply.notes,
         completed_at: reply.createdAt,
@@ -308,7 +335,8 @@ register("read_outbox", {
 register("reply_to_letter", {
   description:
     "Send a reply to an incoming work request letter after completing the work. " +
-    "The reply is delivered to the requesting agent's inbox.",
+    "The reply is delivered to the requesting agent's inbox. " +
+    "If the original letter included verification steps, you MUST include verification_results.",
   parameters: {
     type: "object",
     properties: {
@@ -319,6 +347,13 @@ register("reply_to_letter", {
       changes_made: {
         type: "string",
         description: "Description of the changes you made to fulfill the request",
+      },
+      verification_results: {
+        type: "string",
+        description:
+          "Results of running the verification steps specified in the original letter. " +
+          "REQUIRED if the letter included verification steps. Include command outputs, " +
+          "test results, or evidence that each step passed.",
       },
       api_contract: {
         type: "string",
@@ -352,10 +387,25 @@ register("reply_to_letter", {
         fs.readFileSync(letterPath, "utf-8"),
       );
 
+      // Enforce verification: if original letter had verification steps,
+      // the reply must include verification results
+      if (
+        originalLetter.verificationSteps?.length > 0 &&
+        !args.verification_results
+      ) {
+        return {
+          error:
+            "The original letter included verification steps. You MUST provide " +
+            "verification_results showing the output of running those steps. " +
+            `Steps required: ${originalLetter.verificationSteps.map((s) => `"${s}"`).join(", ")}`,
+        };
+      }
+
       const result = sendReply({
         repoPath: cwd,
         originalLetter,
         changesMade: args.changes_made,
+        verificationResults: args.verification_results || "",
         apiContract: args.api_contract || "",
         notes: args.notes || "",
         status: args.status || "completed",
@@ -534,7 +584,8 @@ register("find_agent_for_task", {
   description:
     "Find the best registered agent to handle a task based on their description snippets. " +
     "Describe what you need and this tool will rank agents by relevance. " +
-    "Use this before send_letter when you're not sure which agent to contact.",
+    "Use this before send_letter when you're not sure which agent to contact. " +
+    "This automatically creates a 'related' relationship with the best match so you can send_letter to them.",
   parameters: {
     type: "object",
     properties: {
@@ -543,6 +594,12 @@ register("find_agent_for_task", {
         description:
           "Description of the task or capability you need. " +
           "e.g., 'I need a new REST endpoint for user avatars' or 'I need database migration support'",
+      },
+      auto_link: {
+        type: "boolean",
+        description:
+          "If true (default), automatically create a 'related' relationship with the best match " +
+          "so you can immediately use send_letter. Set to false to just search without linking.",
       },
     },
     required: ["task"],
@@ -560,6 +617,18 @@ register("find_agent_for_task", {
         };
       }
 
+      // Auto-link the best match so send_letter's relationship check passes
+      const shouldLink = args.auto_link !== false;
+      if (shouldLink && results[0]) {
+        const bestPath = results[0].agent.path;
+        const related = getRelatedAgents(cwd);
+        const alreadyLinked = related.some((r) => r.agent.path === bestPath);
+        if (!alreadyLinked) {
+          addRelation(cwd, bestPath, "related");
+          logger.info(`Auto-linked to ${bestPath} for task: ${args.task}`);
+        }
+      }
+
       return {
         count: results.length,
         matches: results.map((r) => ({
@@ -569,7 +638,11 @@ register("find_agent_for_task", {
           snippet: r.agent.snippet || r.agent.description || "(none)",
           relevance_score: r.score,
         })),
-        suggestion: `Best match: "${results[0].agent.name}" (score: ${results[0].score}). Use send_letter with to="${results[0].agent.name}" to send a request.`,
+        auto_linked: shouldLink && results[0] ? results[0].agent.name : null,
+        suggestion: `Best match: "${results[0].agent.name}" (score: ${results[0].score}). ` +
+          (shouldLink
+            ? `Relationship auto-created. You can now use send_letter with to="${results[0].agent.name}".`
+            : `Use link_repos to create a relationship, then send_letter.`),
       };
     } catch (err) {
       logger.error(`find_agent_for_task failed: ${err.message}`);

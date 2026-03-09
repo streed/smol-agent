@@ -150,6 +150,7 @@ created_at: 2025-01-01T00:00:00Z
         status: "completed",
         createdAt: "2025-01-01T00:00:00Z",
         changesMade: "Added new endpoint",
+        verificationResults: "All tests pass: 10/10",
         apiContract: "GET /api/v1/users",
         notes: "Needs migration",
       });
@@ -158,6 +159,7 @@ created_at: 2025-01-01T00:00:00Z
       expect(parsed.type).toBe("response");
       expect(parsed.inReplyTo).toBe("req-1");
       expect(parsed.changesMade).toBe("Added new endpoint");
+      expect(parsed.verificationResults).toBe("All tests pass: 10/10");
       expect(parsed.apiContract).toBe("GET /api/v1/users");
       expect(parsed.notes).toBe("Needs migration");
     });

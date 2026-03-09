@@ -7,6 +7,7 @@ import { loadSkills } from "./skills.js";
 import { logger } from "./logger.js";
 import { buildRepoMap } from "./repo-map.js";
 import { loadMemoryBank } from "./memory-bank.js";
+import { getRelatedAgents } from "./agent-registry.js";
 
 /**
  * Gather lightweight project context for the system prompt.
@@ -73,7 +74,21 @@ export async function gatherContext(cwd, contextSize = 100) {
     sections.push(`## Codebase context docs\nAvailable: ${docs.join(", ")}\nCheck .smol-agent/docs/<name>.md before exploring a directory.`);
   }
 
-  // 8. Skills from global and local directories (SKILL.md format)
+  // 8. Related agents (cross-agent relationships from the registry)
+  try {
+    const related = getRelatedAgents(cwd);
+    if (related.length > 0) {
+      const lines = related.map((r) => {
+        const dir = r.direction === "outgoing" ? "→" : "←";
+        return `- **${r.agent.name}** (${r.agent.role || "unknown role"}) ${dir} ${r.type} — ${r.agent.snippet || r.agent.description || "(no description)"}`;
+      });
+      sections.push(
+        `## Related Agents\nThis repo has relationships with the following agents. You can use send_letter to communicate with them.\n${lines.join("\n")}`
+      );
+    }
+  } catch (err) { logger.debug(`Related agents skipped: ${err.message}`); }
+
+  // 9. Skills from global and local directories (SKILL.md format)
   const skills = await loadSkills(cwd);
   if (skills.length > 0) {
     const lines = skills.map(s => {
