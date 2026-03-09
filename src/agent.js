@@ -17,6 +17,8 @@ import {
 } from "./sessions.js";
 import { architectPass, formatPlanForEditor } from "./architect.js";
 import { createCheckpoint, rollbackToCheckpoint, listCheckpoints, cleanupCheckpoints } from "./checkpoint.js";
+import { touchAgent, detectRepoMetadata, detectSnippet, registerAgent } from "./agent-registry.js";
+import { watchForResponses } from "./cross-agent.js";
 
 // Import all tools so they self-register
 import "./tools/run_command.js";
@@ -33,6 +35,7 @@ import { setSubAgentConfig } from "./tools/sub_agent.js";
 import "./tools/context_docs.js";
 import "./tools/git.js";
 import "./tools/session_tools.js";
+import "./tools/cross_agent.js";
 
 // ── Thinking tags parser ─────────────────────────────────────────────
 
@@ -306,6 +309,9 @@ export class Agent extends EventEmitter {
     // Architect mode — two-pass planning/execution (Aider/Kilocode pattern)
     this._architectMode = false;
 
+    // Cross-agent response watcher — notifies this agent when replies arrive
+    this._responseWatcher = null;
+
     // Set the global jail directory for all tools
     registry.setJailDirectory(this.jailDirectory);
     // Expose client for backward-compatibility (e.g. TUI calls listModels(agent.client))
@@ -436,6 +442,48 @@ export class Agent extends EventEmitter {
 
     // Ensure tiktoken is ready for accurate token counting
     await ensureTiktoken();
+
+    // Self-register in the global agent registry so other agents can discover us
+    try {
+      const meta = detectRepoMetadata(this.jailDirectory);
+      const snippet = detectSnippet(this.jailDirectory);
+      registerAgent({
+        repoPath: this.jailDirectory,
+        name: meta.name,
+        description: meta.description,
+        snippet: snippet || undefined,
+      });
+    } catch (err) {
+      logger.debug(`Agent registry: ${err.message}`);
+    }
+
+    // Start watching for cross-agent response letters arriving in our inbox.
+    // When a reply arrives, inject it into the conversation so the agent
+    // doesn't have to poll with check_reply.
+    if (!this._responseWatcher) {
+      try {
+        this._responseWatcher = watchForResponses({
+          repoPath: this.jailDirectory,
+          onResponse: (response) => {
+            const summary = [
+              `[Cross-agent reply received]`,
+              `Letter: "${response.title}"`,
+              `From: ${response.from}`,
+              `Status: ${response.status || "completed"}`,
+              response.changesMade ? `Changes: ${response.changesMade}` : "",
+              response.apiContract ? `API: ${response.apiContract}` : "",
+              response.notes ? `Notes: ${response.notes}` : "",
+            ].filter(Boolean).join("\n");
+
+            this._pendingInjections.push(summary);
+            this.emit("cross_agent_reply", response);
+            logger.info(`Cross-agent reply received for "${response.title}" from ${response.from}`);
+          },
+        });
+      } catch (err) {
+        logger.debug(`Response watcher: ${err.message}`);
+      }
+    }
 
     let contextBlock = "";
     try {
@@ -1176,6 +1224,18 @@ export class Agent extends EventEmitter {
   cancel() {
     if (this.running && this.abortController) {
       this.abortController.abort();
+    }
+  }
+
+  /**
+   * Clean up resources (file watchers, etc.). Call when the agent is being
+   * disposed of (e.g., on process exit).
+   */
+  destroy() {
+    this.cancel();
+    if (this._responseWatcher) {
+      this._responseWatcher.stop();
+      this._responseWatcher = null;
     }
   }
 

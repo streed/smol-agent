@@ -65,6 +65,15 @@ const TOOL_CATEGORIES = {
   memory_bank_read: "safe",
   memory_bank_write: "safe",
   memory_bank_init: "safe",
+  send_letter: "network",
+  check_reply: "safe",
+  read_inbox: "safe",
+  read_outbox: "safe",
+  reply_to_letter: "write",
+  list_agents: "safe",
+  link_repos: "safe",
+  set_snippet: "safe",
+  find_agent_for_task: "safe",
 };
 
 /**

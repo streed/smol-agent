@@ -35,6 +35,16 @@ import {
   findSession,
   deleteSession,
 } from "../sessions.js";
+import {
+  listAgents as registryListAgents,
+  findAgent as registryFindAgent,
+  registerAgent as registryRegisterAgent,
+  unregisterAgent as registryUnregisterAgent,
+  addRelation as registryAddRelation,
+  removeRelation as registryRemoveRelation,
+  getRelatedAgents as registryGetRelatedAgents,
+  updateAgent as registryUpdateAgent,
+} from "../agent-registry.js";
 
 // ═══ tree-sitter availability check ═══
 
@@ -543,6 +553,8 @@ export function startApp(agent, initialPrompt) {
     { name: "inspect", description: "Dump context to file" },
     { name: "reload-skills", description: "Reload skills from global and local directories" },
     { name: "skills", description: "List available skills" },
+    { name: "agents", description: "List registered agents and their relationships" },
+    { name: "agent", description: "Manage agents (info/link/unlink/snippet/role/remove)" },
     { name: "exit", description: "Exit the agent" },
   ];
   
@@ -795,6 +807,227 @@ export function startApp(agent, initialPrompt) {
       return;
     }
 
+    // ── Agent registry commands ──
+    if (trimmed === "/agents") {
+      try {
+        const agents = registryListAgents();
+        const cwd = agent.jailDirectory || process.cwd();
+        if (agents.length === 0) {
+          chatView.addLog(chalk.dim("    ⎿  No agents registered. Agents self-register when they start up."));
+        } else {
+          chatView.addLog(chalk.dim(`    ⎿  Registered agents (${agents.length}):`));
+          for (const a of agents) {
+            const isSelf = a.path === cwd;
+            const marker = isSelf ? chalk.green(" *") : "  ";
+            const role = a.role ? chalk.yellow(` [${a.role}]`) : "";
+            const desc = a.description ? chalk.dim(` — ${a.description}`) : "";
+            chatView.addLog(`      ${marker} ${chalk.cyan.bold(a.name)}${role}${desc}`);
+            chatView.addLog(chalk.dim(`           ${a.path}`));
+            if (a.snippet) {
+              const snip = a.snippet.length > 80 ? a.snippet.slice(0, 77) + "..." : a.snippet;
+              chatView.addLog(chalk.dim(`           ${chalk.italic(snip)}`));
+            }
+            // Show relations
+            const related = registryGetRelatedAgents(a.path);
+            if (related.length > 0) {
+              for (const rel of related) {
+                const arrow = rel.direction === "outgoing" ? "→" : "←";
+                chatView.addLog(chalk.dim(`           ${arrow} ${rel.type} ${chalk.cyan(rel.agent.name)}`));
+              }
+            }
+            const seen = new Date(a.lastSeen).toLocaleString();
+            chatView.addLog(chalk.dim(`           last seen: ${seen}`));
+          }
+          chatView.addLog(chalk.dim("        Use /agent <subcommand> to manage agents"));
+        }
+      } catch (err) {
+        chatView.addLog(chalk.red(` ✗ Failed to list agents: ${err.message}`));
+      }
+      return;
+    }
+
+    if (trimmed.startsWith("/agent ") || trimmed === "/agent") {
+      const parts = trimmed.split(/\s+/);
+      const subCmd = parts[1] || "help";
+      const arg = parts.slice(2).join(" ");
+
+      if (subCmd === "info") {
+        if (!arg) {
+          chatView.addLog(chalk.red(" ✗ Usage: /agent info <name or path>"));
+          return;
+        }
+        const found = registryFindAgent(arg);
+        if (!found) {
+          chatView.addLog(chalk.red(` ✗ Agent not found: ${arg}`));
+          return;
+        }
+        chatView.addLog(chalk.dim(`    ⎿  Agent: ${chalk.cyan.bold(found.name)}`));
+        chatView.addLog(chalk.dim(`        Path: ${found.path}`));
+        chatView.addLog(chalk.dim(`        Role: ${found.role || "(none)"}`));
+        chatView.addLog(chalk.dim(`        Description: ${found.description || "(none)"}`));
+        if (found.snippet) {
+          chatView.addLog(chalk.dim(`        Snippet:`));
+          for (const line of found.snippet.split("\n").slice(0, 5)) {
+            chatView.addLog(chalk.dim(`          ${line}`));
+          }
+        }
+        chatView.addLog(chalk.dim(`        Registered: ${new Date(found.registeredAt).toLocaleString()}`));
+        chatView.addLog(chalk.dim(`        Last seen: ${new Date(found.lastSeen).toLocaleString()}`));
+        const related = registryGetRelatedAgents(found.path);
+        if (related.length > 0) {
+          chatView.addLog(chalk.dim(`        Relations:`));
+          for (const rel of related) {
+            const arrow = rel.direction === "outgoing" ? "→" : "←";
+            chatView.addLog(chalk.dim(`          ${arrow} ${rel.type} ${chalk.cyan(rel.agent.name)} (${rel.agent.path})`));
+          }
+        }
+        return;
+      }
+
+      if (subCmd === "add") {
+        if (!arg) {
+          chatView.addLog(chalk.red(" ✗ Usage: /agent add <path> [name]"));
+          return;
+        }
+        const addParts = arg.split(/\s+/);
+        const repoPath = addParts[0];
+        const name = addParts.slice(1).join(" ") || undefined;
+        try {
+          const entry = registryRegisterAgent({ repoPath, name });
+          chatView.addLog(chalk.dim(`    ⎿  Agent registered: ${chalk.cyan(entry.name)} (${entry.path})`));
+        } catch (err) {
+          chatView.addLog(chalk.red(` ✗ Failed to add agent: ${err.message}`));
+        }
+        return;
+      }
+
+      if (subCmd === "remove" || subCmd === "rm") {
+        if (!arg) {
+          chatView.addLog(chalk.red(" ✗ Usage: /agent remove <name or path>"));
+          return;
+        }
+        const found = registryFindAgent(arg);
+        if (!found) {
+          chatView.addLog(chalk.red(` ✗ Agent not found: ${arg}`));
+          return;
+        }
+        registryUnregisterAgent(found.path);
+        chatView.addLog(chalk.dim(`    ⎿  Agent removed: ${chalk.cyan(found.name)} (${found.path})`));
+        return;
+      }
+
+      if (subCmd === "role") {
+        // /agent role <name> <role>
+        const roleParts = arg.split(/\s+/);
+        if (roleParts.length < 2) {
+          chatView.addLog(chalk.red(" ✗ Usage: /agent role <name> <role>"));
+          chatView.addLog(chalk.dim("        e.g., /agent role backend-api backend"));
+          return;
+        }
+        const targetName = roleParts[0];
+        const newRole = roleParts.slice(1).join(" ");
+        const found = registryFindAgent(targetName);
+        if (!found) {
+          chatView.addLog(chalk.red(` ✗ Agent not found: ${targetName}`));
+          return;
+        }
+        registryUpdateAgent(found.path, { role: newRole });
+        chatView.addLog(chalk.dim(`    ⎿  ${chalk.cyan(found.name)} role set to: ${chalk.yellow(newRole)}`));
+        return;
+      }
+
+      if (subCmd === "snippet") {
+        // /agent snippet <name> <text...>
+        const snipParts = arg.split(/\s+/);
+        if (snipParts.length < 2) {
+          chatView.addLog(chalk.red(" ✗ Usage: /agent snippet <name> <description text...>"));
+          chatView.addLog(chalk.dim("        Describes what this repo provides so other agents can find it automatically."));
+          chatView.addLog(chalk.dim("        e.g., /agent snippet backend-api REST API with /users, /products endpoints. Auth via JWT."));
+          return;
+        }
+        const targetName = snipParts[0];
+        const snippetText = snipParts.slice(1).join(" ");
+        const found = registryFindAgent(targetName);
+        if (!found) {
+          chatView.addLog(chalk.red(` ✗ Agent not found: ${targetName}`));
+          return;
+        }
+        registryUpdateAgent(found.path, { snippet: snippetText });
+        chatView.addLog(chalk.dim(`    ⎿  ${chalk.cyan(found.name)} snippet updated`));
+        return;
+      }
+
+      if (subCmd === "link") {
+        // /agent link <from> <to> <type>
+        const linkParts = arg.split(/\s+/);
+        if (linkParts.length < 3) {
+          chatView.addLog(chalk.red(" ✗ Usage: /agent link <from> <to> <type>"));
+          chatView.addLog(chalk.dim("        Types: depends-on, serves, consumes, related"));
+          chatView.addLog(chalk.dim("        e.g., /agent link frontend backend-api depends-on"));
+          return;
+        }
+        const [fromName, toName, relType] = linkParts;
+        const fromAgent = registryFindAgent(fromName);
+        const toAgent = registryFindAgent(toName);
+        if (!fromAgent) {
+          chatView.addLog(chalk.red(` ✗ Agent not found: ${fromName}`));
+          return;
+        }
+        if (!toAgent) {
+          chatView.addLog(chalk.red(` ✗ Agent not found: ${toName}`));
+          return;
+        }
+        const validTypes = ["depends-on", "serves", "consumes", "related"];
+        if (!validTypes.includes(relType)) {
+          chatView.addLog(chalk.red(` ✗ Invalid relation type: ${relType}. Use: ${validTypes.join(", ")}`));
+          return;
+        }
+        registryAddRelation(fromAgent.path, toAgent.path, relType);
+        chatView.addLog(chalk.dim(`    ⎿  Linked: ${chalk.cyan(fromAgent.name)} --${relType}--> ${chalk.cyan(toAgent.name)}`));
+        return;
+      }
+
+      if (subCmd === "unlink") {
+        // /agent unlink <from> <to> [type]
+        const unlinkParts = arg.split(/\s+/);
+        if (unlinkParts.length < 2) {
+          chatView.addLog(chalk.red(" ✗ Usage: /agent unlink <from> <to> [type]"));
+          chatView.addLog(chalk.dim("        Omit type to remove all relations between the two agents."));
+          return;
+        }
+        const [fromName, toName, relType] = unlinkParts;
+        const fromAgent = registryFindAgent(fromName);
+        const toAgent = registryFindAgent(toName);
+        if (!fromAgent) {
+          chatView.addLog(chalk.red(` ✗ Agent not found: ${fromName}`));
+          return;
+        }
+        if (!toAgent) {
+          chatView.addLog(chalk.red(` ✗ Agent not found: ${toName}`));
+          return;
+        }
+        const removed = registryRemoveRelation(fromAgent.path, toAgent.path, relType);
+        if (removed) {
+          chatView.addLog(chalk.dim(`    ⎿  Unlinked: ${chalk.cyan(fromAgent.name)} -x-> ${chalk.cyan(toAgent.name)}`));
+        } else {
+          chatView.addLog(chalk.dim(`    ⎿  No matching relation found.`));
+        }
+        return;
+      }
+
+      // Help / unknown subcommand
+      chatView.addLog(chalk.dim("    ⎿  Agent commands:"));
+      chatView.addLog(chalk.dim("        /agents                           List all registered agents"));
+      chatView.addLog(chalk.dim("        /agent info <name>                Show detailed agent info"));
+      chatView.addLog(chalk.dim("        /agent add <path> [name]          Register a new agent"));
+      chatView.addLog(chalk.dim("        /agent remove <name>              Remove an agent from registry"));
+      chatView.addLog(chalk.dim("        /agent role <name> <role>         Set agent role (backend, frontend, etc.)"));
+      chatView.addLog(chalk.dim("        /agent snippet <name> <text...>   Set agent description snippet"));
+      chatView.addLog(chalk.dim("        /agent link <from> <to> <type>    Link two agents (depends-on, serves, consumes, related)"));
+      chatView.addLog(chalk.dim("        /agent unlink <from> <to> [type]  Remove a link between agents"));
+      return;
+    }
+
     if (trimmed === "/reflect") {
       // Read recent logs and analyze for skill development opportunities
       const logs = readRecentLogs(1000);
@@ -961,7 +1194,7 @@ Reflect on these logs and determine if there's a skill worth creating. If the lo
         !trimmed.startsWith("/quit") && !trimmed.startsWith("/reflect") && !trimmed.startsWith("/skills") &&
         !trimmed.startsWith("/session") && !trimmed.startsWith("/sessions") &&
         !trimmed.startsWith("/architect") && !trimmed.startsWith("/undo") && !trimmed.startsWith("/checkpoints") &&
-        !trimmed.startsWith("/approve")) {
+        !trimmed.startsWith("/approve") && !trimmed.startsWith("/agents") && !trimmed.startsWith("/agent")) {
       const skillName = trimmed.slice(1).split(/\s+/)[0];
       
       // Check if this matches a skill
@@ -1209,6 +1442,14 @@ Reflect on these logs and determine if there's a skill worth creating. If the lo
     tui.requestRender();
   };
 
+  const onCrossAgentReply = (response) => {
+    const from = response.from || "unknown";
+    const title = response.title || "untitled";
+    const status = response.status || "completed";
+    chatView.addLog(chalk.cyan(`    ⎿  ← Cross-agent reply: "${title}" from ${from} [${status}]`));
+    tui.requestRender();
+  };
+
   agent.on("stream_start", onStreamStart);
   agent.on("token", onToken);
   agent.on("stream_end", onStreamEnd);
@@ -1221,6 +1462,7 @@ Reflect on these logs and determine if there's a skill worth creating. If the lo
   agent.on("retry", onRetry);
   agent.on("session_resumed", onSessionResumed);
   agent.on("sub_agent_progress", onSubAgentProgress);
+  agent.on("cross_agent_reply", onCrossAgentReply);
 
   // ── ask_user handler ──
   setAskHandler((question) =>

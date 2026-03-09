@@ -20,6 +20,7 @@ smol-agent gives a local language model the tools it needs to read, write, and e
 - [Persistent Memory](#persistent-memory)
 - [Skills](#skills)
 - [Architecture](#architecture)
+- [Cross-Agent Communication](#cross-agent-communication)
 - [Advanced Features](#advanced-features)
 - [Contributing](#contributing)
 - [Security](#security)
@@ -432,6 +433,58 @@ smol-agent --acp
 ```
 
 Communicates via JSON-RPC over stdio, compatible with ACP-compatible editors.
+
+## Cross-Agent Communication
+
+smol-agent instances can communicate across repositories using the **inbox/letter protocol**. This allows a frontend agent to request backend changes, a main agent to delegate to a documentation agent, etc.
+
+### How It Works
+
+```
+Agent A                          Agent B
+  |                                |
+  |  1. find_agent_for_task()      |
+  |  2. send_letter() --------->  inbox/.letter.md
+  |                                |  3. watchInbox detects letter
+  |                                |  4. Spawns agent, does work
+  |                                |  5. reply_to_letter()
+  |  inbox/.response.md  <------- |
+  |  6. Auto-notified via watcher  |
+  |  (injected into conversation)  |
+```
+
+### Agent Discovery
+
+Agents self-register in a global registry (`~/.config/smol-agent/agents.json`) on startup. Use these tools to find and communicate with other agents:
+
+| Tool | Description |
+|------|-------------|
+| `list_agents` | List all registered agents |
+| `find_agent_for_task` | Find the best agent for a task (keyword matching against snippets) |
+| `send_letter` | Send a work request to another agent (supports `wait_for_reply`) |
+| `check_reply` | Poll for a response to a sent letter |
+| `reply_to_letter` | Send a response back after completing work |
+| `link_repos` | Create relationships between repos (depends-on, serves, etc.) |
+
+### Response Delivery
+
+Responses are delivered through three complementary mechanisms:
+
+1. **Auto-notification** (default) -- A file watcher detects incoming `.response.md` files and injects the reply into the running conversation automatically.
+2. **Blocking wait** -- `send_letter(wait_for_reply: true)` blocks until the reply arrives (up to 5 minutes).
+3. **Manual poll** -- `check_reply(letter_id)` for explicit polling.
+
+If a spawned agent exits without calling `reply_to_letter`, the system auto-generates a completed/failed response as a safety net.
+
+### Inbox Watcher Mode
+
+Run a persistent watcher that processes incoming letters:
+
+```bash
+smol-agent --watch-inbox
+```
+
+See [docs/cross-agent-communication.md](docs/cross-agent-communication.md) for the full protocol specification with Mermaid diagrams.
 
 ## Contributing
 

@@ -213,4 +213,90 @@ Separates planning from execution:
 
 This prevents the agent from jumping into code changes without understanding the problem. Available via `/architect` command.
 
+## Cross-Agent Communication Protocol
+
+Enables agents working in separate repositories to request work from each other using an inbox/letter model. No network protocol — just markdown files and process spawning.
+
+### Directory layout (per repo)
+
+```
+.smol-agent/inbox/           ← incoming letters + responses
+  <id>.letter.md             ← request from another agent
+  <id>.response.md           ← response to a request
+.smol-agent/outbox/          ← copies of sent letters (tracking)
+  <id>.letter.md
+```
+
+### Letter format
+
+Letters use YAML frontmatter + markdown body:
+- **Frontmatter**: id, type (request/response), title, from, to, in_reply_to, status, priority, created_at
+- **Body sections**: Body, Acceptance Criteria, Context (requests) or Changes Made, API Contract, Notes (responses)
+
+### Global Agent Registry
+
+Agents self-register in `~/.config/smol-agent/agents.json` on startup, auto-detecting name/description from `package.json`, `pyproject.toml`, `Cargo.toml`, or `go.mod`. This allows agents to discover each other by name instead of requiring absolute paths.
+
+Registry entries include: name, path, role, description, **snippet**, relations (e.g., depends-on, serves), lastSeen timestamp.
+
+**Snippets**: Each repo can provide a description snippet that describes what it offers (endpoints, services, data models). Other agents use `find_agent_for_task` to automatically find the right repo to communicate with. Snippets are auto-detected from `.smol-agent/snippet.md` or AGENT.md, or set manually via `/agent snippet` or `set_snippet` tool.
+
+The `send_letter` tool resolves agent names via the registry, so you can write `send_letter({ to: "backend-api", ... })` instead of providing a full path.
+
+### TUI commands
+
+```
+/agents                           List all registered agents with relations
+/agent info <name>                Show detailed agent info
+/agent add <path> [name]          Register a new agent manually
+/agent remove <name>              Remove an agent from registry
+/agent role <name> <role>         Set agent role (backend, frontend, etc.)
+/agent snippet <name> <text...>   Set agent description snippet
+/agent link <from> <to> <type>    Link two agents (depends-on, serves, consumes, related)
+/agent unlink <from> <to> [type]  Remove a link between agents
+```
+
+### Tools
+
+| Tool | Description | Category |
+|------|-------------|----------|
+| `send_letter` | Send a work request to another agent's inbox (supports name lookup) | network |
+| `check_reply` | Check if a reply arrived for a sent letter | safe |
+| `read_inbox` | Read letters in this agent's inbox | safe |
+| `read_outbox` | Read sent letters and their reply status | safe |
+| `reply_to_letter` | Reply to an incoming request after completing work | write |
+| `list_agents` | List all registered agents (discover who to send letters to) | safe |
+| `link_repos` | Create a relationship between two repos (depends-on, serves, etc.) | safe |
+| `set_snippet` | Set this repo's description snippet for auto-discovery | safe |
+| `find_agent_for_task` | Find the best agent for a task based on snippet matching | safe |
+
+### Workflow
+
+1. **Frontend agent** uses `send_letter` to drop a request in the backend repo's inbox
+2. **Backend watcher** (`--watch-inbox`) detects the new letter and spawns a smol-agent
+3. **Backend agent** reads the letter, does the work, writes a response to the inbox
+4. Response is delivered back to the frontend repo's inbox
+5. **Frontend agent** uses `check_reply` to read the response and continue
+
+### Inbox listening is opt-in
+
+Agents **ignore** inbox letters by default. To process incoming letters, you must explicitly run the inbox watcher:
+
+```bash
+# Run the inbox watcher (opt-in, monitors for incoming letters)
+smol-agent --watch-inbox -d /path/to/repo -p anthropic
+```
+
+The watcher is a long-running process that monitors `.smol-agent/inbox/` for new `.letter.md` files and spawns an agent to handle each one. Without `--watch-inbox`, agents can still _send_ letters and _read_ their inbox, but won't automatically process incoming requests.
+
+### Source files
+
+| File | Purpose |
+|------|---------|
+| `src/cross-agent.js` | Core protocol: letter serialization, inbox/outbox ops, watcher, agent spawning |
+| `src/agent-registry.js` | Global agent registry: registration, discovery, relations, metadata detection |
+| `src/tools/cross_agent.js` | Tool registrations: send_letter, check_reply, read_inbox, read_outbox, reply_to_letter, list_agents, link_repos |
+| `test/unit/cross-agent.test.js` | Unit tests (16 tests covering serialization, ops, e2e workflow) |
+| `test/unit/agent-registry.test.js` | Unit tests (24 tests covering registration, discovery, relations, metadata) |
+
 
