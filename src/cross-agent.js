@@ -406,6 +406,135 @@ export function checkForReply(repoPath, letterId) {
   return parseLetter(fs.readFileSync(responsePath, "utf-8"));
 }
 
+// ── Wait for reply ────────────────────────────────────────────────────
+
+/**
+ * Wait for a reply to a previously sent letter using a file watcher.
+ * Returns a promise that resolves with the parsed response when it arrives,
+ * or rejects on timeout/abort.
+ *
+ * @param {object} opts
+ * @param {string} opts.repoPath   - The sender's repo (where the reply will arrive)
+ * @param {string} opts.letterId   - The original letter ID
+ * @param {number} [opts.timeoutMs] - Timeout in ms (default: 5 minutes)
+ * @param {AbortSignal} [opts.signal] - Signal to cancel the wait
+ * @returns {Promise<object>} Parsed response letter
+ */
+export function waitForReply({ repoPath, letterId, timeoutMs = 300_000, signal }) {
+  // Check if the reply already exists
+  const existing = checkForReply(repoPath, letterId);
+  if (existing) return Promise.resolve(existing);
+
+  return new Promise((resolve, reject) => {
+    const inboxDir = ensureInbox(path.resolve(repoPath));
+    const targetFile = `${letterId}.response.md`;
+
+    let watcher;
+    let timer;
+    let settled = false;
+
+    const cleanup = () => {
+      if (settled) return;
+      settled = true;
+      if (watcher) { try { watcher.close(); } catch {} }
+      if (timer) clearTimeout(timer);
+      if (signal) signal.removeEventListener("abort", onAbort);
+    };
+
+    const onAbort = () => {
+      cleanup();
+      reject(new Error("Wait for reply aborted"));
+    };
+
+    // Timeout
+    timer = setTimeout(() => {
+      cleanup();
+      reject(new Error(`Timed out waiting for reply to letter ${letterId} after ${timeoutMs}ms`));
+    }, timeoutMs);
+
+    // Abort signal
+    if (signal) {
+      if (signal.aborted) { onAbort(); return; }
+      signal.addEventListener("abort", onAbort, { once: true });
+    }
+
+    // Watch for the response file to appear
+    watcher = fs.watch(inboxDir, (eventType, filename) => {
+      if (filename !== targetFile) return;
+
+      // Small delay to ensure the file is fully written
+      setTimeout(() => {
+        if (settled) return;
+        const responsePath = path.join(inboxDir, targetFile);
+        if (!fs.existsSync(responsePath)) return;
+
+        try {
+          const response = parseLetter(fs.readFileSync(responsePath, "utf-8"));
+          cleanup();
+          resolve(response);
+        } catch (err) {
+          cleanup();
+          reject(new Error(`Failed to parse reply: ${err.message}`));
+        }
+      }, 100);
+    });
+
+    watcher.on("error", (err) => {
+      cleanup();
+      reject(new Error(`Watcher error: ${err.message}`));
+    });
+  });
+}
+
+// ── Inbox response watcher ────────────────────────────────────────────
+
+/**
+ * Watch a repo's inbox for incoming response letters and invoke a callback.
+ * This allows an active agent to be notified when replies arrive, instead
+ * of having to poll with check_reply.
+ *
+ * @param {object} opts
+ * @param {string} opts.repoPath - Repo to watch
+ * @param {function} opts.onResponse - Called with parsed response letter
+ * @param {AbortSignal} [opts.signal] - Signal to stop watching
+ * @returns {{ stop: function }}
+ */
+export function watchForResponses({ repoPath, onResponse, signal }) {
+  const inboxDir = ensureInbox(path.resolve(repoPath));
+  const seen = new Set();
+
+  // Track existing responses so we only fire for new ones
+  try {
+    const files = fs.readdirSync(inboxDir).filter(f => f.endsWith(".response.md"));
+    for (const f of files) seen.add(f);
+  } catch {}
+
+  const watcher = fs.watch(inboxDir, async (eventType, filename) => {
+    if (!filename || !filename.endsWith(".response.md")) return;
+    if (seen.has(filename)) return;
+    seen.add(filename);
+
+    // Small delay to ensure file is fully written
+    await new Promise(r => setTimeout(r, 200));
+
+    const filePath = path.join(inboxDir, filename);
+    if (!fs.existsSync(filePath)) return;
+
+    try {
+      const response = parseLetter(fs.readFileSync(filePath, "utf-8"));
+      onResponse(response);
+    } catch (err) {
+      logger.warn(`Failed to parse response ${filename}: ${err.message}`);
+    }
+  });
+
+  if (signal) {
+    signal.addEventListener("abort", () => watcher.close(), { once: true });
+  }
+
+  return { stop() { watcher.close(); } };
+}
+
 // ── Inbox Watcher ─────────────────────────────────────────────────────
 
 /**
@@ -520,6 +649,11 @@ export function watchInbox({
 
 /**
  * Spawn a smol-agent to process a single letter.
+ *
+ * The spawned agent is instructed to use the `reply_to_letter` tool when done.
+ * As a safety net, if the agent exits without sending a reply, this function
+ * auto-generates a response (completed on exit code 0, failed otherwise) and
+ * delivers it to the original sender's inbox.
  */
 export function processLetter({
   repoPath,
@@ -545,6 +679,7 @@ export function processLetter({
   const prompt = [
     `You have received a cross-agent work request letter. Here are the details:`,
     ``,
+    `**Letter ID**: ${letter.id}`,
     `**Title**: ${letter.title}`,
     `**From**: ${letter.from}`,
     `**Priority**: ${letter.priority}`,
@@ -557,38 +692,15 @@ export function processLetter({
       : "",
     letter.context ? `**Context**: ${letter.context}` : "",
     ``,
-    `Complete the requested work. When finished:`,
+    `Complete the requested work, then use the **reply_to_letter** tool to send a response back.`,
     ``,
-    `1. Create a response file at "${path.join(INBOX_DIR, responseFile)}" with this format:`,
+    `When calling reply_to_letter, provide:`,
+    `- letter_id: "${letter.id}"`,
+    `- changes_made: a summary of what you changed`,
+    `- api_contract: any API surface / interfaces the requesting agent needs to know about`,
+    `- notes: any additional context or caveats`,
     ``,
-    "```markdown",
-    `---`,
-    `id: <generate-a-uuid>`,
-    `type: response`,
-    `title: ${letter.title}`,
-    `from: ${repoPath}`,
-    `to: ${letter.from}`,
-    `in_reply_to: ${letter.id}`,
-    `status: completed`,
-    `priority: normal`,
-    `created_at: <current ISO timestamp>`,
-    `---`,
-    ``,
-    `# Re: ${letter.title}`,
-    ``,
-    `## Changes Made`,
-    `<describe what you changed>`,
-    ``,
-    `## API Contract / Interface`,
-    `<describe any API surface the requesting agent needs>`,
-    ``,
-    `## Notes`,
-    `<any additional notes>`,
-    "```",
-    ``,
-    `2. Update the status in "${path.join(INBOX_DIR, `${letter.id}.letter.md`)}" from "in-progress" to "completed"`,
-    `3. Commit your changes`,
-    ``,
+    `Commit your changes before sending the reply.`,
     `Focus only on the requested work. Do not modify unrelated code.`,
   ]
     .filter(Boolean)
@@ -628,32 +740,80 @@ export function processLetter({
     });
 
     child.on("error", (err) => {
+      // Agent failed to spawn — send a failure response back
+      autoReplyIfMissing(repoPath, letter, responseFile, 1, err.message);
       reject(new Error(`Failed to spawn agent: ${err.message}`));
     });
 
     child.on("close", (code) => {
       logger.info(`Agent for letter ${letter.id} exited with code ${code}`);
 
-      // After agent completes, deliver the response to the sender's inbox
-      const localResponsePath = path.join(
-        repoPath,
-        INBOX_DIR,
-        responseFile,
-      );
-      if (fs.existsSync(localResponsePath) && letter.from && fs.existsSync(letter.from)) {
-        try {
-          const senderInbox = ensureInbox(letter.from);
-          fs.copyFileSync(
-            localResponsePath,
-            path.join(senderInbox, responseFile),
-          );
-          logger.info(`Response delivered to sender: ${letter.from}`);
-        } catch (err) {
-          logger.warn(`Could not deliver response to sender: ${err.message}`);
-        }
-      }
+      // Safety net: if the agent didn't send a reply (via reply_to_letter
+      // tool or by manually writing the response file), auto-generate one.
+      autoReplyIfMissing(repoPath, letter, responseFile, code, stderr);
 
       resolve({ exitCode: code, stdout, stderr });
     });
   });
+}
+
+/**
+ * If no response file exists for a letter, auto-generate one and deliver it
+ * to the original sender. This ensures the calling agent always gets a reply,
+ * even if the spawned agent crashed or forgot to call reply_to_letter.
+ */
+function autoReplyIfMissing(repoPath, letter, responseFile, exitCode, errorOutput) {
+  const localResponsePath = path.join(repoPath, INBOX_DIR, responseFile);
+
+  // If the agent already wrote a response (via reply_to_letter tool), just
+  // make sure it's delivered to the sender.
+  if (fs.existsSync(localResponsePath)) {
+    deliverResponseToSender(localResponsePath, letter.from, responseFile);
+    return;
+  }
+
+  // No response file — auto-generate one
+  const succeeded = exitCode === 0;
+  const status = succeeded ? "completed" : "failed";
+  const changesMade = succeeded
+    ? "Work completed by automated agent. Check the repository for changes."
+    : `Agent exited with code ${exitCode}.`;
+  const notes = !succeeded && errorOutput
+    ? `Error output:\n${typeof errorOutput === "string" ? errorOutput.slice(-500) : errorOutput}`
+    : "";
+
+  logger.info(`Auto-generating ${status} response for letter ${letter.id}`);
+
+  try {
+    sendReply({
+      repoPath,
+      originalLetter: letter,
+      changesMade,
+      apiContract: "",
+      notes,
+      status,
+    });
+    logger.info(`Auto-reply sent for letter ${letter.id} (${status})`);
+  } catch (err) {
+    logger.error(`Failed to auto-reply for letter ${letter.id}: ${err.message}`);
+  }
+}
+
+/**
+ * Copy a response file to the sender's inbox.
+ */
+function deliverResponseToSender(localResponsePath, senderRepo, responseFile) {
+  if (!senderRepo || !fs.existsSync(senderRepo)) return;
+
+  try {
+    const senderInbox = ensureInbox(senderRepo);
+    const destPath = path.join(senderInbox, responseFile);
+    // Don't overwrite if sendReply() already delivered it
+    if (!fs.existsSync(destPath)) {
+      fs.copyFileSync(localResponsePath, destPath);
+    }
+    logger.info(`Response delivered to sender: ${senderRepo}`);
+  } catch (err) {
+    logger.warn(`Could not deliver response to sender: ${err.message}`);
+  }
 }

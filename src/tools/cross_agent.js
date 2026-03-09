@@ -21,6 +21,7 @@ import {
   readOutbox,
   sendReply,
   parseLetter,
+  waitForReply,
 } from "../cross-agent.js";
 import {
   findAgent,
@@ -77,6 +78,18 @@ register("send_letter", {
         enum: ["low", "medium", "high"],
         description: "Priority level (default: medium)",
       },
+      wait_for_reply: {
+        type: "boolean",
+        description:
+          "If true, block until the other agent sends a reply (up to 5 minutes). " +
+          "If false (default), return immediately with a letter_id you can poll with check_reply. " +
+          "Note: you'll also be notified automatically when a reply arrives.",
+      },
+      wait_timeout_ms: {
+        type: "number",
+        description:
+          "Timeout in milliseconds when wait_for_reply is true (default: 300000 = 5 minutes)",
+      },
     },
     required: ["to", "title", "body"],
   },
@@ -105,11 +118,45 @@ register("send_letter", {
         priority: args.priority || "medium",
       });
 
+      // If wait_for_reply, block until the response arrives
+      if (args.wait_for_reply) {
+        try {
+          const reply = await waitForReply({
+            repoPath: cwd,
+            letterId: result.id,
+            timeoutMs: args.wait_timeout_ms || 300_000,
+          });
+          return {
+            success: true,
+            letter_id: result.id,
+            delivered_to: toPath,
+            reply: {
+              status: reply.status || "completed",
+              title: reply.title,
+              changes_made: reply.changesMade,
+              api_contract: reply.apiContract,
+              notes: reply.notes,
+              completed_at: reply.createdAt,
+            },
+            message: `Letter sent and reply received from ${toPath}.`,
+          };
+        } catch (waitErr) {
+          return {
+            success: true,
+            letter_id: result.id,
+            delivered_to: toPath,
+            wait_error: waitErr.message,
+            message: `Letter sent to ${toPath} but timed out waiting for reply. Use check_reply with letter_id to poll later.`,
+          };
+        }
+      }
+
       return {
         success: true,
         letter_id: result.id,
         delivered_to: toPath,
-        message: `Letter sent to ${toPath}. Letter ID: ${result.id}. Use check_reply with this ID to see when the work is done.`,
+        message: `Letter sent to ${toPath}. Letter ID: ${result.id}. ` +
+          `You'll be notified when the reply arrives, or use check_reply to poll.`,
       };
     } catch (err) {
       logger.error(`send_letter failed: ${err.message}`);
@@ -123,7 +170,9 @@ register("send_letter", {
 register("check_reply", {
   description:
     "Check if a reply has arrived for a letter you previously sent. " +
-    "Returns the response details if the work is done, or null if still pending.",
+    "Returns the response details if the work is done, or null if still pending. " +
+    "Note: you'll also be automatically notified when replies arrive, so you may " +
+    "not need to call this unless you want to re-read a specific reply.",
   parameters: {
     type: "object",
     properties: {

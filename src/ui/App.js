@@ -1442,6 +1442,14 @@ Reflect on these logs and determine if there's a skill worth creating. If the lo
     tui.requestRender();
   };
 
+  const onCrossAgentReply = (response) => {
+    const from = response.from || "unknown";
+    const title = response.title || "untitled";
+    const status = response.status || "completed";
+    chatView.addLog(chalk.cyan(`    ⎿  ← Cross-agent reply: "${title}" from ${from} [${status}]`));
+    tui.requestRender();
+  };
+
   agent.on("stream_start", onStreamStart);
   agent.on("token", onToken);
   agent.on("stream_end", onStreamEnd);
@@ -1454,6 +1462,7 @@ Reflect on these logs and determine if there's a skill worth creating. If the lo
   agent.on("retry", onRetry);
   agent.on("session_resumed", onSessionResumed);
   agent.on("sub_agent_progress", onSubAgentProgress);
+  agent.on("cross_agent_reply", onCrossAgentReply);
 
   // ── ask_user handler ──
   setAskHandler((question) =>
