@@ -61,6 +61,15 @@ const FORBIDDEN_PATTERNS = [
 
   // Prevent indirect command execution via $(which ...) or `...`
   /\$\(which\s+/i,
+
+  // Git destructive commands — use the dedicated 'git' tool which has safety guards.
+  // These bypass the git tool's approval checks if run through run_command.
+  /\bgit\s+checkout\s+(--\s+)?[.*]/,          // git checkout -- . / git checkout .
+  /\bgit\s+reset\s+--hard\b/,                 // git reset --hard
+  /\bgit\s+clean\b/,                           // git clean (deletes untracked files)
+  /\bgit\s+stash\b(?!\s+(pop|apply|show|list)\b)/, // git stash (but allow pop/apply/show/list)
+  /\bgit\s+restore\s+(--staged\s+)?[.*]/,      // git restore . / git restore --staged .
+  /\bgit\s+push\b/,                            // git push (blocked in git tool too)
 ];
 
 // Maximum command length to prevent DoS

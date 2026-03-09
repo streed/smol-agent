@@ -24,6 +24,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
+import { createInterface } from "node:readline";
 import { logger } from "./logger.js";
 import os from "node:os";
 
@@ -862,6 +863,7 @@ export function watchInbox({
   signal,
   onLetterReceived,
   onAgentComplete,
+  onProgress,
 }) {
   const inboxDir = ensureInbox(path.resolve(repoPath));
   const processing = new Set(); // Track letters being processed
@@ -891,6 +893,9 @@ export function watchInbox({
         provider,
         model,
         apiKey,
+        onProgress: onProgress
+          ? (event) => onProgress({ ...event, letterId: letter.id, letterTitle: letter.title })
+          : undefined,
       });
       onAgentComplete?.(letter, null);
     } catch (err) {
@@ -949,6 +954,7 @@ export function processLetter({
   provider,
   model,
   apiKey,
+  onProgress,
 }) {
   validateRegisteredAgentPath(repoPath, "processing agent");
 
@@ -1001,13 +1007,13 @@ export function processLetter({
     `IMPORTANT: If verification steps were provided, you MUST run them and include the results in verification_results.`,
     `If any verification step fails, set status to "failed" and describe what failed.`,
     ``,
-    `Commit your changes before sending the reply.`,
+    `Do NOT commit changes — leave them as uncommitted modifications in the working tree.`,
     `Focus only on the requested work. Do not modify unrelated code.`,
   ]
     .filter(Boolean)
     .join("\n");
 
-  const args = ["--directory", repoPath, "--auto-approve"];
+  const args = ["--directory", repoPath, "--auto-approve", "--all-tools", "--progress-fd", "3"];
 
   if (provider) args.push("--provider", provider);
   if (model) args.push("--model", model);
@@ -1033,7 +1039,7 @@ export function processLetter({
 
     const child = spawn(command, spawnArgs, {
       cwd: repoPath,
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: ["ignore", "pipe", "pipe", "pipe"],
       env: childEnv,
     });
 
@@ -1056,6 +1062,20 @@ export function processLetter({
       }
     });
 
+    // Parse JSONL progress events from fd 3
+    if (onProgress && child.stdio[3]) {
+      const rl = createInterface({ input: child.stdio[3] });
+      rl.on("line", (line) => {
+        try {
+          const event = JSON.parse(line);
+          onProgress(event);
+        } catch {
+          // Ignore malformed JSONL lines
+        }
+      });
+      rl.on("error", () => {}); // Ignore read errors on fd 3
+    }
+
     child.on("error", (err) => {
       // Agent failed to spawn — send a failure response back
       autoReplyIfMissing(repoPath, letter, responseFile, 1, err.message);
@@ -1064,6 +1084,9 @@ export function processLetter({
 
     child.on("close", (code) => {
       logger.info(`Agent for letter ${letter.id} exited with code ${code}`);
+      if (code !== 0 && stderr) {
+        logger.warn(`Agent stderr for letter ${letter.id}:\n${stderr.slice(-1000)}`);
+      }
 
       // Safety net: if the agent didn't send a reply (via reply_to_letter
       // tool or by manually writing the response file), auto-generate one.

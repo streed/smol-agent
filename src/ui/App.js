@@ -14,7 +14,7 @@ import {
 import chalk from "chalk";
 import { createRequire } from "node:module";
 import { writeFileSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { join, dirname, basename } from "node:path";
 import { execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
@@ -1450,6 +1450,26 @@ Reflect on these logs and determine if there's a skill worth creating. If the lo
     tui.requestRender();
   };
 
+  const onCrossAgentProgress = (event) => {
+    if (event.type === "sent") {
+      const to = event.to ? basename(event.to) : "remote agent";
+      chatView.addLog(chalk.dim(`    ⎿  [cross-agent] Letter sent to ${to}: "${event.title}"`));
+    } else if (event.type === "waiting") {
+      const to = event.to ? basename(event.to) : "remote agent";
+      statusText = `waiting for ${to}: "${(event.title || "").substring(0, 50)}"`;
+    } else if (event.type === "reply_received") {
+      statusText = "";
+    } else if (event.type === "wait_timeout") {
+      statusText = "";
+      chatView.addLog(chalk.dim(`    ⎿  [cross-agent] Timed out waiting for "${event.title}"`));
+    } else if (event.type === "tool_call") {
+      chatView.addLog(chalk.dim(`    ⎿  [remote] ${event.name}(${summarizeArgs(event.args).substring(0, 60)})`));
+    } else if (event.type === "tool_result") {
+      // success/failure logged passively
+    }
+    tui.requestRender();
+  };
+
   agent.on("stream_start", onStreamStart);
   agent.on("token", onToken);
   agent.on("stream_end", onStreamEnd);
@@ -1463,6 +1483,7 @@ Reflect on these logs and determine if there's a skill worth creating. If the lo
   agent.on("session_resumed", onSessionResumed);
   agent.on("sub_agent_progress", onSubAgentProgress);
   agent.on("cross_agent_reply", onCrossAgentReply);
+  agent.on("cross_agent_progress", onCrossAgentProgress);
 
   // ── ask_user handler ──
   setAskHandler((question) =>
@@ -1565,6 +1586,8 @@ Reflect on these logs and determine if there's a skill worth creating. If the lo
     agent.off("retry", onRetry);
     agent.off("session_resumed", onSessionResumed);
     agent.off("sub_agent_progress", onSubAgentProgress);
+    agent.off("cross_agent_reply", onCrossAgentReply);
+    agent.off("cross_agent_progress", onCrossAgentProgress);
     tui.stop();
   }
 

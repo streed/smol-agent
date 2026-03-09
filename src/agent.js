@@ -32,6 +32,7 @@ import "./tools/plan_tools.js";
 import "./tools/reflection.js";
 import "./tools/memory.js";
 import { setSubAgentConfig } from "./tools/sub_agent.js";
+import { setCrossAgentConfig } from "./tools/cross_agent.js";
 import "./tools/context_docs.js";
 import "./tools/git.js";
 import "./tools/session_tools.js";
@@ -336,6 +337,11 @@ export class Agent extends EventEmitter {
       llmProvider: this.llmProvider,
       maxTokens: this.maxTokens,
       cwd: this.jailDirectory,
+    });
+
+    // Configure cross-agent progress reporting
+    setCrossAgentConfig({
+      onProgress: (e) => this.emit("cross_agent_progress", e),
     });
   }
 
@@ -679,6 +685,11 @@ export class Agent extends EventEmitter {
     setSubAgentConfig({
       signal: this.abortController.signal,
       onProgress: (event) => this.emit("sub_agent_progress", event),
+    });
+
+    // Update cross-agent progress callback
+    setCrossAgentConfig({
+      onProgress: (e) => this.emit("cross_agent_progress", e),
     });
 
     const tools = registry.getTools(this.coreToolsOnly);

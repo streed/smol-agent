@@ -123,6 +123,7 @@ let listSessionsFlag = false;   // --list-sessions
 let sessionName = undefined;    // --session-name <name> for new sessions
 let continueSession = false;    // --continue to resume the most recent session
 let watchInboxFlag = false;     // --watch-inbox to run inbox watcher
+let progressFd = undefined;    // --progress-fd <n> to write JSONL progress events
 
 for (let i = 0; i < args.length; i++) {
   const a = args[i];
@@ -161,6 +162,12 @@ for (let i = 0; i < args.length; i++) {
     listSessionsFlag = true;
   } else if (a === "--watch-inbox") {
     watchInboxFlag = true;
+  } else if (a === "--progress-fd" && args[i + 1]) {
+    progressFd = parseInt(args[++i], 10);
+    if (!Number.isFinite(progressFd) || progressFd < 0) {
+      console.error("Error: --progress-fd must be a non-negative integer");
+      process.exit(1);
+    }
   } else if (a === "--self-update") {
     runSelfUpdate();
   } else if (a === "--help") {
@@ -197,6 +204,7 @@ Options:
       --approve-execute     Auto-approve shell command execution (but still prompt for writes)
       --acp                 Run as ACP (Agent Client Protocol) server over stdio
       --watch-inbox         Watch inbox for cross-agent letters and process them
+      --progress-fd <n>    Write JSONL progress events to file descriptor n
       --self-update         Update smol-agent to the latest version
       --help                Show this help message
 
@@ -310,6 +318,13 @@ if (acpMode) {
         console.log(`  Completed: "${letter.title}" (${letter.id})`);
       }
     },
+    onProgress(event) {
+      if (event.type === "tool_call") {
+        console.log(`  [${event.letterTitle || "agent"}] ${event.name}(...)`);
+      } else if (event.type === "tool_result" && !event.success) {
+        console.log(`  [${event.letterTitle || "agent"}] ${event.name} failed`);
+      }
+    },
   });
 
   // Graceful shutdown
@@ -318,6 +333,51 @@ if (acpMode) {
     watcher.stop();
     process.exit(0);
   });
+} else if (progressFd !== undefined && promptText) {
+  // ── Headless mode (spawned child agent) ─────────────────────────────
+  // When --progress-fd is set with a prompt, run the agent without TUI.
+  // This is used by processLetter() to spawn child agents that can
+  // reliably execute tools without the overhead/fragility of a TUI on
+  // a non-TTY stdin.
+  const agent = new Agent({ host, model, provider, apiKey, jailDirectory, coreToolsOnly });
+
+  if (autoApprove) agent._approveAll = true;
+  if (autoApproveWrites) agent.approveCategory("write");
+  if (autoApproveExecute) agent.approveCategory("execute");
+
+  // Write JSONL progress events to the given fd using synchronous writes
+  // (fs.createWriteStream(null, { fd }) throws in Node 18+ since null isn't a valid path)
+  const writeProgress = (event) => {
+    try { fs.writeSync(progressFd, JSON.stringify(event) + "\n"); } catch {}
+  };
+  agent.on("tool_call", ({ name, args }) => writeProgress({ type: "tool_call", name, args }));
+  agent.on("tool_result", ({ name, result }) => writeProgress({ type: "tool_result", name, success: !result?.error }));
+  agent.on("stream_start", () => writeProgress({ type: "streaming" }));
+  agent.on("stream_end", () => writeProgress({ type: "completed" }));
+
+  // Diagnostic: log git status before exit so we can trace vanishing changes
+  const logGitState = (label) => {
+    try {
+      const gitStatus = execSync("git status --porcelain", { cwd: jailDirectory, encoding: "utf-8", timeout: 5000 });
+      const gitLog = execSync("git log --oneline -1", { cwd: jailDirectory, encoding: "utf-8", timeout: 5000 }).trim();
+      if (gitStatus.trim()) {
+        console.error(`[headless:${label}] Uncommitted changes:\n${gitStatus.trim()}`);
+      } else {
+        console.error(`[headless:${label}] Clean working tree. Last commit: ${gitLog}`);
+      }
+    } catch { /* git not available or not a repo */ }
+  };
+
+  try {
+    await agent.run(promptText);
+    logGitState("exit");
+    process.exit(0);
+  } catch (err) {
+    console.error(`[headless] Agent error: ${err.message}`);
+    if (err.stack) console.error(err.stack);
+    logGitState("crash");
+    process.exit(1);
+  }
 } else {
   // ── TUI mode ────────────────────────────────────────────────────────
   const agent = new Agent({ host, model, provider, apiKey, jailDirectory, coreToolsOnly });

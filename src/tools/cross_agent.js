@@ -14,6 +14,13 @@
  */
 
 import { register } from "./registry.js";
+
+// ── Cross-agent progress config (set by Agent) ───────────────────────
+let crossAgentConfig = { onProgress: null };
+
+export function setCrossAgentConfig(cfg) {
+  if (cfg.onProgress !== undefined) crossAgentConfig.onProgress = cfg.onProgress;
+}
 import {
   sendLetter,
   checkForReply,
@@ -146,14 +153,27 @@ register("send_letter", {
         priority: args.priority || "medium",
       });
 
+      // Emit progress: letter sent
+      if (crossAgentConfig.onProgress) {
+        crossAgentConfig.onProgress({ type: "sent", letterId: result.id, title: args.title, to: toPath, waitForReply: !!args.wait_for_reply });
+      }
+
       // If wait_for_reply, block until the response arrives
       if (args.wait_for_reply) {
+        // Emit progress: waiting for reply
+        if (crossAgentConfig.onProgress) {
+          crossAgentConfig.onProgress({ type: "waiting", letterId: result.id, title: args.title, to: toPath });
+        }
         try {
           const reply = await waitForReply({
             repoPath: cwd,
             letterId: result.id,
             timeoutMs: args.wait_timeout_ms || DEFAULT_REPLY_TIMEOUT_MS,
           });
+          // Emit progress: reply received
+          if (crossAgentConfig.onProgress) {
+            crossAgentConfig.onProgress({ type: "reply_received", letterId: result.id, title: args.title, status: reply.status || "completed" });
+          }
           return {
             success: true,
             letter_id: result.id,
@@ -170,6 +190,10 @@ register("send_letter", {
             message: `Letter sent and reply received from ${toPath}.`,
           };
         } catch (waitErr) {
+          // Emit progress: wait timed out
+          if (crossAgentConfig.onProgress) {
+            crossAgentConfig.onProgress({ type: "wait_timeout", letterId: result.id, title: args.title });
+          }
           return {
             success: true,
             letter_id: result.id,
