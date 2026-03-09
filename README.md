@@ -67,6 +67,11 @@ Errors are shown in red:
  ✗ connect ECONNREFUSED 127.0.0.1:11434
 ```
 
+## Benchmark
+
+ <!-- BENCHMARK-RESULTS-START -->
+ <!-- BENCHMARK-RESULTS-END -->
+
 ### Rich Markdown Rendering
 
 Agent responses are rendered with rich markdown formatting in the terminal:
