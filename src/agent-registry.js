@@ -39,10 +39,15 @@ const LOCK_STALE_MS = 30000;
 
 // ── File locking ──────────────────────────────────────────────────────
 
+// Shared buffer used by Atomics.wait() for non-spinning delays in acquireLock.
+// SharedArrayBuffer is available in Node.js 16+ without special flags.
+const _lockWaitBuffer = new Int32Array(new SharedArrayBuffer(4));
+
 /**
  * Acquire an exclusive lock on the registry file.
  * Uses mkdir-based locking (atomic on all platforms).
- * Returns a release function.
+ * Throws an error if the lock cannot be acquired within LOCK_TIMEOUT_MS.
+ * Call releaseLock() when done.
  */
 function acquireLock() {
   fs.mkdirSync(REGISTRY_DIR, { recursive: true });
@@ -87,16 +92,15 @@ function acquireLock() {
       }
 
       if (Date.now() - start > LOCK_TIMEOUT_MS) {
-        // Force-break the lock after timeout to prevent permanent deadlock
-        logger.warn("Registry lock timed out, force-breaking stale lock");
-        fs.rmSync(LOCK_FILE, { recursive: true, force: true });
-        continue;
+        // The lock is held by a live process and we've waited long enough;
+        // do NOT force-break it (that would corrupt the other writer's session).
+        logger.warn("Registry lock acquisition timed out; lock appears non-stale");
+        throw new Error("Timed out acquiring registry lock");
       }
 
-      // Busy-wait with a small delay
+      // Non-spinning delay: Atomics.wait blocks the thread without consuming CPU.
       const waitMs = 10 + Math.random() * 40;
-      const waitUntil = Date.now() + waitMs;
-      while (Date.now() < waitUntil) { /* spin */ }
+      Atomics.wait(_lockWaitBuffer, 0, 0, waitMs);
     }
   }
 }
@@ -143,15 +147,19 @@ export function loadRegistry() {
 }
 
 /**
- * Save the registry to disk.
+ * Save the registry to disk atomically (write to temp file, then rename).
+ * This prevents readers from observing partially-written JSON.
  */
 export function saveRegistry(registry) {
   fs.mkdirSync(REGISTRY_DIR, { recursive: true });
-  fs.writeFileSync(
-    REGISTRY_FILE,
-    JSON.stringify(registry, null, 2),
-    "utf-8",
-  );
+  const tmpFile = `${REGISTRY_FILE}.${process.pid}.${Date.now()}.tmp`;
+  try {
+    fs.writeFileSync(tmpFile, JSON.stringify(registry, null, 2), "utf-8");
+    fs.renameSync(tmpFile, REGISTRY_FILE);
+  } catch (err) {
+    try { fs.rmSync(tmpFile, { force: true }); } catch { /* ignore */ }
+    throw err;
+  }
 }
 
 // ── Registration ──────────────────────────────────────────────────────
@@ -624,7 +632,9 @@ export function findAgentForTask(query, excludeRepo) {
     }
   }
 
-  // Sort by score descending
-  scored.sort((a, b) => b.score - a.score);
+  // Sort by score descending; alphabetical name as a stable tiebreaker
+  scored.sort(
+    (a, b) => b.score - a.score || a.agent.name.localeCompare(b.agent.name),
+  );
   return scored;
 }

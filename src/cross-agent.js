@@ -281,7 +281,15 @@ export function clearStaleInbox(repoPath) {
         logger.info(`Cleared stale letter: ${file}`);
       }
     } catch (err) {
-      logger.warn(`Failed to process stale letter ${file}: ${err.message}`);
+      // If we can't parse the letter, move it to cleared so it doesn't get
+      // stuck (fs.watch won't re-emit for files that already existed).
+      logger.warn(`Could not parse letter ${file}, moving to cleared: ${err.message}`);
+      try {
+        fs.renameSync(filePath, path.join(clearedDir, file));
+        count++;
+      } catch (moveErr) {
+        logger.warn(`Failed to move unparseable letter ${file}: ${moveErr.message}`);
+      }
     }
   }
 
@@ -505,11 +513,18 @@ export function checkForReply(repoPath, letterId) {
  */
 /**
  * Default reply timeout: 10 minutes, configurable via SMOL_AGENT_REPLY_TIMEOUT_MS env var.
+ * Falls back to 600000 ms if the env var is absent, empty, or non-numeric.
  */
-export const DEFAULT_REPLY_TIMEOUT_MS = parseInt(
-  process.env.SMOL_AGENT_REPLY_TIMEOUT_MS || "600000",
-  10,
-);
+const DEFAULT_REPLY_TIMEOUT_FALLBACK_MS = 600000;
+const _envReplyTimeoutRaw = process.env.SMOL_AGENT_REPLY_TIMEOUT_MS;
+const _envReplyTimeoutParsed =
+  _envReplyTimeoutRaw !== undefined && _envReplyTimeoutRaw !== ""
+    ? parseInt(_envReplyTimeoutRaw, 10)
+    : NaN;
+export const DEFAULT_REPLY_TIMEOUT_MS =
+  Number.isFinite(_envReplyTimeoutParsed) && _envReplyTimeoutParsed > 0
+    ? _envReplyTimeoutParsed
+    : DEFAULT_REPLY_TIMEOUT_FALLBACK_MS;
 
 export function waitForReply({ repoPath, letterId, timeoutMs = DEFAULT_REPLY_TIMEOUT_MS, signal }) {
   // Check if the reply already exists
