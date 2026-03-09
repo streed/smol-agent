@@ -213,4 +213,59 @@ Separates planning from execution:
 
 This prevents the agent from jumping into code changes without understanding the problem. Available via `/architect` command.
 
+## Cross-Agent Communication Protocol
+
+Enables agents working in separate repositories to request work from each other using an inbox/letter model. No network protocol — just markdown files and process spawning.
+
+### Directory layout (per repo)
+
+```
+.smol-agent/inbox/           ← incoming letters + responses
+  <id>.letter.md             ← request from another agent
+  <id>.response.md           ← response to a request
+.smol-agent/outbox/          ← copies of sent letters (tracking)
+  <id>.letter.md
+```
+
+### Letter format
+
+Letters use YAML frontmatter + markdown body:
+- **Frontmatter**: id, type (request/response), title, from, to, in_reply_to, status, priority, created_at
+- **Body sections**: Body, Acceptance Criteria, Context (requests) or Changes Made, API Contract, Notes (responses)
+
+### Tools
+
+| Tool | Description | Category |
+|------|-------------|----------|
+| `send_letter` | Send a work request to another agent's inbox | network |
+| `check_reply` | Check if a reply arrived for a sent letter | safe |
+| `read_inbox` | Read letters in this agent's inbox | safe |
+| `read_outbox` | Read sent letters and their reply status | safe |
+| `reply_to_letter` | Reply to an incoming request after completing work | write |
+
+### Workflow
+
+1. **Frontend agent** uses `send_letter` to drop a request in the backend repo's inbox
+2. **Backend watcher** (`--watch-inbox`) detects the new letter and spawns a smol-agent
+3. **Backend agent** reads the letter, does the work, writes a response to the inbox
+4. Response is delivered back to the frontend repo's inbox
+5. **Frontend agent** uses `check_reply` to read the response and continue
+
+### CLI
+
+```bash
+# Run the inbox watcher (monitors for incoming letters)
+smol-agent --watch-inbox -d /path/to/repo -p anthropic
+
+# Letters are processed automatically with --auto-approve
+```
+
+### Source files
+
+| File | Purpose |
+|------|---------|
+| `src/cross-agent.js` | Core protocol: letter serialization, inbox/outbox ops, watcher, agent spawning |
+| `src/tools/cross_agent.js` | Tool registrations: send_letter, check_reply, read_inbox, read_outbox, reply_to_letter |
+| `test/unit/cross-agent.test.js` | Unit tests (16 tests covering serialization, ops, e2e workflow) |
+
 

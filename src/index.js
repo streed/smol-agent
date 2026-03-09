@@ -122,6 +122,7 @@ let sessionId = undefined;      // --session <id> to resume
 let listSessionsFlag = false;   // --list-sessions
 let sessionName = undefined;    // --session-name <name> for new sessions
 let continueSession = false;    // --continue to resume the most recent session
+let watchInboxFlag = false;     // --watch-inbox to run inbox watcher
 
 for (let i = 0; i < args.length; i++) {
   const a = args[i];
@@ -158,6 +159,8 @@ for (let i = 0; i < args.length; i++) {
     sessionName = args[++i];
   } else if (a === "--list-sessions" || a === "--sessions") {
     listSessionsFlag = true;
+  } else if (a === "--watch-inbox") {
+    watchInboxFlag = true;
   } else if (a === "--self-update") {
     runSelfUpdate();
   } else if (a === "--help") {
@@ -187,6 +190,7 @@ Options:
       --approve-writes      Auto-approve file write operations (but still prompt for commands)
       --approve-execute     Auto-approve shell command execution (but still prompt for writes)
       --acp                 Run as ACP (Agent Client Protocol) server over stdio
+      --watch-inbox         Watch inbox for cross-agent letters and process them
       --self-update         Update smol-agent to the latest version
       --help                Show this help message
 
@@ -275,6 +279,38 @@ if (acpMode) {
     apiKey,
     coreToolsOnly,
     autoApprove,
+  });
+} else if (watchInboxFlag) {
+  // ── Inbox watcher mode ───────────────────────────────────────────
+  const { watchInbox } = await import("./cross-agent.js");
+  console.log(`Watching inbox for cross-agent letters in: ${jailDirectory}`);
+  console.log("Press Ctrl+C to stop.\n");
+
+  const watcher = watchInbox({
+    repoPath: jailDirectory,
+    provider,
+    model,
+    apiKey,
+    onLetterReceived(letter) {
+      console.log(`\nNew letter received: "${letter.title}" (${letter.id})`);
+      console.log(`  From: ${letter.from}`);
+      console.log(`  Priority: ${letter.priority}`);
+      console.log("  Spawning agent to handle...\n");
+    },
+    onAgentComplete(letter, err) {
+      if (err) {
+        console.error(`  Failed to process "${letter.title}": ${err.message}`);
+      } else {
+        console.log(`  Completed: "${letter.title}" (${letter.id})`);
+      }
+    },
+  });
+
+  // Graceful shutdown
+  process.on("SIGINT", () => {
+    console.log("\nStopping inbox watcher...");
+    watcher.stop();
+    process.exit(0);
   });
 } else {
   // ── TUI mode ────────────────────────────────────────────────────────

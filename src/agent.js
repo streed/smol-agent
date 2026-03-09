@@ -33,6 +33,7 @@ import { setSubAgentConfig } from "./tools/sub_agent.js";
 import "./tools/context_docs.js";
 import "./tools/git.js";
 import "./tools/session_tools.js";
+import "./tools/cross_agent.js";
 
 // ── Thinking tags parser ─────────────────────────────────────────────
 
