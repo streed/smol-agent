@@ -15,6 +15,8 @@ smol-agent gives a local language model the tools it needs to read, write, and e
 - [Install](#install)
 - [Usage](#usage)
 - [Tools](#tools)
+- [Progressive Tool Discovery](#progressive-tool-discovery)
+- [Programmatic Tool Calling](#programmatic-tool-calling)
 - [Context Management](#context-management)
 - [Context Injection](#context-injection)
 - [Persistent Memory](#persistent-memory)
@@ -374,6 +376,93 @@ The agent has access to the following tools:
 | `recall` | Retrieve memories from persistent storage |
 | `save_context` | Save a dense summary of a directory/code area for future sessions |
 | `delegate` | Spawn a sub-agent for focused research tasks |
+
+## Progressive Tool Discovery
+
+smol-agent uses a progressive tool discovery system to improve context efficiency. Instead of loading all 45+ tools into the context window at once (which wastes tokens and confuses smaller models), tools are organized into groups and unlocked on demand.
+
+### How It Works
+
+1. **Starter groups** are always active: `explore` (read_file, list_files, grep, ask_user), `edit` (write_file, replace_in_file), and `execute` (run_command, git, code_execution) — 9 core tools
+2. **Additional groups** are activated when needed, either automatically or via the `discover_tools` meta-tool
+3. **Tools refresh each iteration** — once a group is activated, its tools are immediately available
+
+### Tool Groups
+
+| Group | Tools | Description |
+|-------|-------|-------------|
+| `explore` | read_file, list_files, grep, ask_user | Read files, list directories, search code |
+| `edit` | write_file, replace_in_file | Create and edit files |
+| `execute` | run_command, git, code_execution | Shell commands, git operations, code execution |
+| `plan` | save_plan, load_plan_progress, complete_plan_step, update_plan_status, get_current_plan, reflect | Planning and progress tracking |
+| `memory` | remember, recall, memory_bank_read, memory_bank_write, memory_bank_init, save_context | Persistent memory and cross-session knowledge |
+| `web` | web_search, web_fetch | Search the web and fetch URLs |
+| `multi_agent` | delegate, send_letter, check_reply, read_inbox, read_outbox, reply_to_letter, list_agents, link_repos, set_snippet, find_agent_for_task | Sub-agents and cross-agent messaging |
+
+### Activation Methods
+
+**Automatic** — The agent detects context signals in user prompts and auto-activates relevant groups. For example, mentioning "plan" or "step by step" activates the `plan` group; mentioning "remember" or "previous session" activates `memory`.
+
+**Explicit** — The agent calls the `discover_tools` meta-tool:
+
+```
+discover_tools({ groups: ["plan", "memory"] })       // activate groups
+discover_tools({ groups: [], list: true })            // list all available groups
+```
+
+**Configuration** — Pass `coreToolsOnly: false` to enable progressive discovery (automatic for 30B+ models), or `--all-tools` to expose everything at once.
+
+### Why This Matters
+
+Progressive discovery reduces context bloat by ~60-70% for typical sessions. Most tasks only need the starter tools. By loading additional tools lazily, the agent preserves context window capacity for actual work — file contents, code analysis, and conversation history.
+
+## Programmatic Tool Calling
+
+When using the Anthropic provider with supported Claude models, smol-agent can enable **server-side programmatic tool calling**. This lets Claude execute Python code on Anthropic's servers and invoke smol-agent's tools from within that code execution sandbox.
+
+### Supported Models
+
+- `claude-opus-4-6`
+- `claude-sonnet-4-6`
+- `claude-sonnet-4-5-20250929`
+- `claude-opus-4-5-20251101`
+
+### How It Works
+
+```
+User prompt → Claude writes Python code → Code runs on Anthropic servers
+                                            ↓
+                                        Calls smol-agent tools via allowed_callers
+                                            ↓
+                                        Results flow back into Claude's reasoning
+```
+
+When enabled:
+1. The Anthropic `code_execution_20260120` tool is prepended to the tool list
+2. All other tools get `allowed_callers: ["code_execution_20260120"]` — making them callable from within the code execution sandbox
+3. The client-side `code_execution` tool is replaced by the server-side version
+4. A container ID is tracked across turns for sandbox reuse
+
+### Enabling
+
+```bash
+# Via CLI
+smol-agent -p anthropic -m claude-sonnet-4-6 --programmatic-tool-calling "your prompt"
+
+# Programmatically
+const agent = new Agent({
+  provider: "anthropic",
+  model: "claude-sonnet-4-6",
+  programmaticToolCalling: true,
+});
+```
+
+### When To Use
+
+Programmatic tool calling is useful when Claude needs to:
+- Orchestrate multiple tool calls in a single reasoning step
+- Process tool results with Python code before deciding next steps
+- Perform calculations or data transformations on tool outputs
 
 ## Context Management
 
