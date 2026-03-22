@@ -34,6 +34,46 @@ const CORE_TOOLS = new Set([
   "code_execution",
 ]);
 
+// ── Progressive Tool Discovery ──────────────────────────────────────
+// Tool groups for progressive discovery. The agent starts with a small
+// "starter" set and unlocks groups as needed — reducing context bloat
+// and improving tool-selection accuracy.
+
+/** @type {Record<string, { tools: string[], description: string }>} */
+const TOOL_GROUPS = {
+  explore: {
+    tools: ["read_file", "list_files", "grep", "ask_user"],
+    description: "Read files, list directories, search code, ask user",
+  },
+  edit: {
+    tools: ["write_file", "replace_in_file"],
+    description: "Create and edit files",
+  },
+  execute: {
+    tools: ["run_command", "git", "code_execution"],
+    description: "Run shell commands, git operations, and execute code",
+  },
+  plan: {
+    tools: ["save_plan", "load_plan_progress", "complete_plan_step", "update_plan_status", "get_current_plan", "reflect"],
+    description: "Create plans, track progress, reflect on work",
+  },
+  memory: {
+    tools: ["remember", "recall", "memory_bank_read", "memory_bank_write", "memory_bank_init", "save_context"],
+    description: "Persist memories, context docs, and cross-session knowledge",
+  },
+  web: {
+    tools: ["web_search", "web_fetch"],
+    description: "Search the web and fetch URLs",
+  },
+  multi_agent: {
+    tools: ["delegate", "send_letter", "check_reply", "read_inbox", "read_outbox", "reply_to_letter", "list_agents", "link_repos", "set_snippet", "find_agent_for_task"],
+    description: "Delegate to sub-agents, cross-agent messaging, agent registry",
+  },
+};
+
+// The starter groups always active at the beginning of a run
+const STARTER_GROUPS = new Set(["explore", "edit", "execute"]);
+
 // Tools that can modify the filesystem or execute arbitrary code.
 // These require user approval before execution (unless auto-approve is on).
 const DANGEROUS_TOOLS = new Set([
@@ -172,6 +212,69 @@ export function extendedToolNames() {
     .map(([name]) => name);
 }
 
+// ── Progressive Discovery API ───────────────────────────────────────
+
+/** Return the starter group names. */
+export function getStarterGroups() {
+  return [...STARTER_GROUPS];
+}
+
+/** Return all group definitions (name → { tools, description }). */
+export function getToolGroups() {
+  return { ...TOOL_GROUPS };
+}
+
+/** Return names of groups that are not in the given activeGroups set. */
+export function getInactiveGroups(activeGroups) {
+  return Object.keys(TOOL_GROUPS).filter(g => !activeGroups.has(g));
+}
+
+/**
+ * Return tools filtered to only those belonging to the given active groups.
+ * Tools not assigned to any group are included if `includeUngrouped` is true.
+ * @param {Set<string>} activeGroups - Set of active group names
+ * @param {boolean} [includeUngrouped=false] - Include tools not in any group
+ */
+export function getToolsForGroups(activeGroups, includeUngrouped = false) {
+  // Build the allowed tool name set from active groups
+  const allowed = new Set();
+  for (const groupName of activeGroups) {
+    const group = TOOL_GROUPS[groupName];
+    if (group) {
+      for (const t of group.tools) allowed.add(t);
+    }
+  }
+
+  // Find tools that aren't in any group
+  const allGrouped = new Set();
+  for (const group of Object.values(TOOL_GROUPS)) {
+    for (const t of group.tools) allGrouped.add(t);
+  }
+
+  const out = [];
+  for (const [name, tool] of tools) {
+    if (allowed.has(name)) {
+      out.push({ type: "function", function: { name, description: tool.description, parameters: tool.parameters } });
+    } else if (includeUngrouped && !allGrouped.has(name)) {
+      out.push({ type: "function", function: { name, description: tool.description, parameters: tool.parameters } });
+    }
+  }
+  return out;
+}
+
+/**
+ * Describe inactive groups as a compact string for the system prompt.
+ * @param {Set<string>} activeGroups
+ */
+export function describeInactiveGroups(activeGroups) {
+  const lines = [];
+  for (const [name, group] of Object.entries(TOOL_GROUPS)) {
+    if (activeGroups.has(name)) continue;
+    lines.push(`- **${name}**: ${group.description} (${group.tools.length} tools)`);
+  }
+  return lines.join("\n");
+}
+
 /**
  * Execute a tool call by name with the given arguments.
  * Uses the global jail directory for security - the cwd parameter from callers
@@ -246,4 +349,9 @@ export default {
   getApprovalCategories,
   setJailDirectory,
   getJailDirectory,
+  getStarterGroups,
+  getToolGroups,
+  getInactiveGroups,
+  getToolsForGroups,
+  describeInactiveGroups,
 };
