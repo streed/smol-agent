@@ -37,6 +37,7 @@ import "./tools/context_docs.js";
 import "./tools/git.js";
 import "./tools/session_tools.js";
 import "./tools/cross_agent.js";
+import "./tools/code_execution.js";
 
 // ── Thinking tags parser ─────────────────────────────────────────────
 
@@ -148,6 +149,7 @@ Then immediately call a tool — do NOT narrate after thinking.
 - If a tool fails, try an alternative approach (e.g., read the file first, then retry with correct content).
 - Use the remember tool to save important project facts for future sessions.
 - For large research tasks, use the delegate tool to spawn a focused sub-agent.
+- For multi-tool workflows (3+ tool calls, loops, or data aggregation), use code_execution to batch tool calls in a single turn. Write JS code that calls tools as async functions (e.g. \`await read_file({ filePath: "..." })\`). Use console.log() for output.
 - After exploring a directory, use save_context to record what you found (keep it short and dense — key files, exports, patterns, no prose).
 - Before exploring, check if .smol-agent/docs/ has context for that area (listed in project context).
 - Check available skills (listed in project context) and read relevant ones before starting a task.
@@ -257,12 +259,13 @@ export class Agent extends EventEmitter {
    * @param {number}  [options.maxTokens]     - Max context window
    * @param {string}  [options.jailDirectory] - Working directory jail
    * @param {boolean} [options.coreToolsOnly] - Restrict to core tools
+   * @param {boolean} [options.programmaticToolCalling] - Enable programmatic tool calling
    */
-  constructor({ host, model, provider, apiKey, llmProvider, contextSize, maxTokens, jailDirectory, coreToolsOnly } = {}) {
+  constructor({ host, model, provider, apiKey, llmProvider, contextSize, maxTokens, jailDirectory, coreToolsOnly, programmaticToolCalling } = {}) {
     super();
 
     // Create or use the provided LLM provider
-    this.llmProvider = llmProvider || createProvider({ provider, model, host, apiKey });
+    this.llmProvider = llmProvider || createProvider({ provider, model, host, apiKey, programmaticToolCalling });
     this.model = this.llmProvider.model;
     this.contextSize = contextSize; // AGENT.md line limit only
     this.maxTokens = maxTokens || 128000;
@@ -597,6 +600,8 @@ export class Agent extends EventEmitter {
     this._verifiedFiles = new Set();
     this._recentToolCalls = [];
     this._loopNudges = 0;
+    this._lastServerToolUses = null;
+    this._lastCodeExecutionResults = null;
     this._shiftLeft.reset();
     // Drain (not clear) pending injections to avoid losing messages queued during async init
     const earlyInjections = this._pendingInjections.splice(0);
@@ -777,6 +782,13 @@ export class Agent extends EventEmitter {
                 this.emit("token", { content: event.content });
               } else if (event.type === "done") {
                 toolCalls = event.toolCalls || [];
+                // Capture server-side programmatic tool calling metadata
+                if (event.serverToolUses?.length) {
+                  this._lastServerToolUses = event.serverToolUses;
+                }
+                if (event.codeExecutionResults?.length) {
+                  this._lastCodeExecutionResults = event.codeExecutionResults;
+                }
                 if (event.tokenUsage) {
                   this.contextManager.updateFromAPI(
                     event.tokenUsage.promptTokens,
@@ -866,6 +878,15 @@ export class Agent extends EventEmitter {
         // Build assistant message — use cleaned content (thinking stripped) to save context
         const assistantMsg = { role: "assistant", content: cleanedContent };
         if (toolCalls.length > 0) assistantMsg.tool_calls = toolCalls;
+        // Preserve server-side programmatic tool calling metadata for Anthropic
+        if (this._lastServerToolUses?.length) {
+          assistantMsg._serverToolUses = this._lastServerToolUses;
+          this._lastServerToolUses = null;
+        }
+        if (this._lastCodeExecutionResults?.length) {
+          assistantMsg._codeExecutionResults = this._lastCodeExecutionResults;
+          this._lastCodeExecutionResults = null;
+        }
         this.messages.push(assistantMsg);
 
         // No tool calls → check if the model is describing work instead of doing it

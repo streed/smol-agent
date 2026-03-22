@@ -124,6 +124,7 @@ let sessionName = undefined;    // --session-name <name> for new sessions
 let continueSession = false;    // --continue to resume the most recent session
 let watchInboxFlag = false;     // --watch-inbox to run inbox watcher
 let progressFd = undefined;    // --progress-fd <n> to write JSONL progress events
+let programmaticTools = undefined; // --programmatic-tools / --no-programmatic-tools
 
 for (let i = 0; i < args.length; i++) {
   const a = args[i];
@@ -168,6 +169,10 @@ for (let i = 0; i < args.length; i++) {
       console.error("Error: --progress-fd must be a non-negative integer");
       process.exit(1);
     }
+  } else if (a === "--programmatic-tools") {
+    programmaticTools = true;
+  } else if (a === "--no-programmatic-tools") {
+    programmaticTools = false;
   } else if (a === "--self-update") {
     runSelfUpdate();
   } else if (a === "--help") {
@@ -202,6 +207,8 @@ Options:
       --auto-approve        Skip approval prompts for write/command tools (alias: --yolo)
       --approve-writes      Auto-approve file write operations (but still prompt for commands)
       --approve-execute     Auto-approve shell command execution (but still prompt for writes)
+      --programmatic-tools  Enable programmatic tool calling (Anthropic: server-side, others: client-side)
+      --no-programmatic-tools  Disable programmatic tool calling
       --acp                 Run as ACP (Agent Client Protocol) server over stdio
       --watch-inbox         Watch inbox for cross-agent letters and process them
       --progress-fd <n>    Write JSONL progress events to file descriptor n
@@ -339,7 +346,7 @@ if (acpMode) {
   // This is used by processLetter() to spawn child agents that can
   // reliably execute tools without the overhead/fragility of a TUI on
   // a non-TTY stdin.
-  const agent = new Agent({ host, model, provider, apiKey, jailDirectory, coreToolsOnly });
+  const agent = new Agent({ host, model, provider, apiKey, jailDirectory, coreToolsOnly, programmaticToolCalling: programmaticTools });
 
   if (autoApprove) agent._approveAll = true;
   if (autoApproveWrites) agent.approveCategory("write");
@@ -380,7 +387,7 @@ if (acpMode) {
   }
 } else {
   // ── TUI mode ────────────────────────────────────────────────────────
-  const agent = new Agent({ host, model, provider, apiKey, jailDirectory, coreToolsOnly });
+  const agent = new Agent({ host, model, provider, apiKey, jailDirectory, coreToolsOnly, programmaticToolCalling: programmaticTools });
 
   // Load persisted settings, CLI flags override
   const settings = await loadSettings(jailDirectory);

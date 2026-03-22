@@ -26,7 +26,15 @@ export class AnthropicProvider extends BaseLLMProvider {
    * @param {string} [options.baseURL] - API base URL (for proxies)
    * @param {object} [options.rateLimitConfig]
    */
-  constructor({ apiKey, model, baseURL, rateLimitConfig } = {}) {
+  /**
+   * @param {object} options
+   * @param {string} options.apiKey - Anthropic API key
+   * @param {string} options.model  - Model name (e.g. "claude-sonnet-4-20250514")
+   * @param {string} [options.baseURL] - API base URL (for proxies)
+   * @param {object} [options.rateLimitConfig]
+   * @param {boolean} [options.programmaticToolCalling] - Enable server-side programmatic tool calling
+   */
+  constructor({ apiKey, model, baseURL, rateLimitConfig, programmaticToolCalling } = {}) {
     super({
       model: model || "claude-sonnet-4-20250514",
       rateLimitConfig: rateLimitConfig || {
@@ -39,6 +47,11 @@ export class AnthropicProvider extends BaseLLMProvider {
 
     this.apiKey = apiKey;
     this.baseURL = (baseURL || "https://api.anthropic.com").replace(/\/+$/, "");
+
+    // Server-side programmatic tool calling (Anthropic-native code execution)
+    this.programmaticToolCalling = programmaticToolCalling ?? false;
+    // Container ID for reusing code execution sandboxes across turns
+    this._containerId = null;
 
     if (!this.apiKey) {
       console.error("⚠️  No ANTHROPIC_API_KEY found. Set it via:");
@@ -70,16 +83,52 @@ export class AnthropicProvider extends BaseLLMProvider {
     return actionable ? `${message}\n  → ${actionable}` : message;
   }
 
+  /** Models that support Anthropic's server-side programmatic tool calling. */
+  static PROGRAMMATIC_MODELS = new Set([
+    "claude-opus-4-6", "claude-sonnet-4-6",
+    "claude-sonnet-4-5-20250929", "claude-opus-4-5-20251101",
+  ]);
+
+  /** Check if the current model supports server-side programmatic tool calling. */
+  supportsProgrammaticToolCalling() {
+    return AnthropicProvider.PROGRAMMATIC_MODELS.has(this._model);
+  }
+
   /**
    * Convert generic tool format (Ollama/OpenAI style) to Anthropic's format.
+   * When programmatic tool calling is enabled and the model supports it,
+   * injects the code_execution tool and sets allowed_callers on other tools.
    */
   formatTools(tools) {
     if (!tools || tools.length === 0) return [];
-    return tools.map(t => ({
-      name: t.function.name,
-      description: t.function.description,
-      input_schema: t.function.parameters || { type: "object", properties: {} },
-    }));
+
+    const useProgrammatic = this.programmaticToolCalling && this.supportsProgrammaticToolCalling();
+
+    const formatted = tools
+      // Skip client-side code_execution when using server-side programmatic calling
+      .filter(t => !(useProgrammatic && t.function.name === "code_execution"))
+      .map(t => {
+        const tool = {
+          name: t.function.name,
+          description: t.function.description,
+          input_schema: t.function.parameters || { type: "object", properties: {} },
+        };
+        // When programmatic calling is enabled, mark tools as callable from code execution
+        if (useProgrammatic) {
+          tool.allowed_callers = ["code_execution_20260120"];
+        }
+        return tool;
+      });
+
+    // Prepend the Anthropic code execution tool
+    if (useProgrammatic) {
+      formatted.unshift({
+        type: "code_execution_20260120",
+        name: "code_execution",
+      });
+    }
+
+    return formatted;
   }
 
   /**
@@ -123,7 +172,7 @@ export class AnthropicProvider extends BaseLLMProvider {
         continue;
       }
 
-      if (msg.role === "assistant" && msg.tool_calls?.length) {
+      if (msg.role === "assistant" && (msg.tool_calls?.length || msg._serverToolUses?.length)) {
         // Convert assistant tool calls to Anthropic's tool_use content blocks.
         // Generate stable IDs and record them so tool result messages can use them.
         pendingToolUseIds = [];
@@ -131,16 +180,38 @@ export class AnthropicProvider extends BaseLLMProvider {
         if (msg.content) {
           content.push({ type: "text", text: msg.content });
         }
-        for (let i = 0; i < msg.tool_calls.length; i++) {
+        // Re-emit server_tool_use blocks (from programmatic tool calling)
+        if (msg._serverToolUses) {
+          for (const stu of msg._serverToolUses) {
+            content.push({
+              type: "server_tool_use",
+              id: stu.id,
+              name: stu.name,
+              input: stu.input,
+            });
+          }
+        }
+        for (let i = 0; i < (msg.tool_calls || []).length; i++) {
           const tc = msg.tool_calls[i];
           const id = tc.id || `tool_use_${converted.length}_${i}`;
           pendingToolUseIds.push(id);
-          content.push({
+          const block = {
             type: "tool_use",
             id,
             name: tc.function.name,
             input: tc.function.arguments,
-          });
+          };
+          // Preserve caller metadata for programmatic tool calls
+          if (tc.caller) {
+            block.caller = tc.caller;
+          }
+          content.push(block);
+        }
+        // Include code_execution_tool_result blocks if present
+        if (msg._codeExecutionResults) {
+          for (const cer of msg._codeExecutionResults) {
+            content.push(cer);
+          }
         }
         converted.push({ role: "assistant", content });
         continue;
@@ -187,30 +258,53 @@ export class AnthropicProvider extends BaseLLMProvider {
 
   /**
    * Extract tool calls and content from Anthropic response content blocks.
+   * Also extracts server_tool_use and code_execution_tool_result blocks
+   * for programmatic tool calling support.
    */
   _parseResponseContent(content) {
     if (!Array.isArray(content)) {
-      return { text: content || "", toolCalls: [] };
+      return { text: content || "", toolCalls: [], serverToolUses: [], codeExecutionResults: [] };
     }
 
     let text = "";
     const toolCalls = [];
+    const serverToolUses = [];
+    const codeExecutionResults = [];
 
     for (const block of content) {
       if (block.type === "text") {
         text += block.text;
       } else if (block.type === "tool_use") {
-        toolCalls.push({
+        const tc = {
           id: block.id,
           function: {
             name: block.name,
             arguments: block.input,
           },
+        };
+        if (block.caller) {
+          tc.caller = block.caller;
+        }
+        toolCalls.push(tc);
+      } else if (block.type === "server_tool_use") {
+        serverToolUses.push({
+          id: block.id,
+          name: block.name,
+          input: block.input,
         });
+      } else if (block.type === "code_execution_tool_result") {
+        codeExecutionResults.push(block);
+        // Extract stdout as text for the model to see
+        if (block.content?.stdout) {
+          text += `\n[Code execution output]\n${block.content.stdout}`;
+        }
+        if (block.content?.stderr) {
+          text += `\n[Code execution stderr]\n${block.content.stderr}`;
+        }
       }
     }
 
-    return { text, toolCalls };
+    return { text, toolCalls, serverToolUses, codeExecutionResults };
   }
 
   async *chatStream(messages, tools, signal, maxTokens = DEFAULT_MAX_TOKENS, onRetry) {
@@ -225,6 +319,8 @@ export class AnthropicProvider extends BaseLLMProvider {
     };
     if (system) body.system = system;
     if (anthropicTools.length > 0) body.tools = anthropicTools;
+    // Reuse code execution container if available
+    if (this._containerId) body.container = this._containerId;
 
     const response = await this._withRetry(async () => {
       const resp = await fetch(`${this.baseURL}/v1/messages`, {
@@ -248,8 +344,13 @@ export class AnthropicProvider extends BaseLLMProvider {
     const decoder = new TextDecoder();
     let buffer = "";
     const toolCalls = [];
+    const serverToolUses = [];
+    const codeExecutionResults = [];
     let currentToolUse = null;
     let currentToolInput = "";
+    let currentServerToolUse = null;
+    let currentServerToolInput = "";
+    let currentBlockType = null;
     let promptTokens = 0;
     let completionTokens = 0;
 
@@ -272,11 +373,30 @@ export class AnthropicProvider extends BaseLLMProvider {
           switch (data.type) {
             case "content_block_start":
               if (data.content_block?.type === "tool_use") {
+                currentBlockType = "tool_use";
                 currentToolUse = {
                   id: data.content_block.id,
                   function: { name: data.content_block.name, arguments: {} },
                 };
+                // Preserve caller metadata for programmatic tool calls
+                if (data.content_block.caller) {
+                  currentToolUse.caller = data.content_block.caller;
+                }
                 currentToolInput = "";
+              } else if (data.content_block?.type === "server_tool_use") {
+                currentBlockType = "server_tool_use";
+                currentServerToolUse = {
+                  id: data.content_block.id,
+                  name: data.content_block.name,
+                  input: {},
+                };
+                currentServerToolInput = "";
+              } else if (data.content_block?.type === "code_execution_tool_result") {
+                currentBlockType = "code_execution_tool_result";
+                // Will be populated from content_block_stop or delta
+                codeExecutionResults.push(data.content_block);
+              } else {
+                currentBlockType = data.content_block?.type || null;
               }
               break;
 
@@ -285,12 +405,16 @@ export class AnthropicProvider extends BaseLLMProvider {
                 yield { type: "token", content: data.delta.text };
               }
               if (data.delta?.type === "input_json_delta" && data.delta.partial_json) {
-                currentToolInput += data.delta.partial_json;
+                if (currentBlockType === "server_tool_use") {
+                  currentServerToolInput += data.delta.partial_json;
+                } else {
+                  currentToolInput += data.delta.partial_json;
+                }
               }
               break;
 
             case "content_block_stop":
-              if (currentToolUse) {
+              if (currentBlockType === "tool_use" && currentToolUse) {
                 try {
                   currentToolUse.function.arguments = JSON.parse(currentToolInput || "{}");
                 } catch {
@@ -299,7 +423,17 @@ export class AnthropicProvider extends BaseLLMProvider {
                 toolCalls.push(currentToolUse);
                 currentToolUse = null;
                 currentToolInput = "";
+              } else if (currentBlockType === "server_tool_use" && currentServerToolUse) {
+                try {
+                  currentServerToolUse.input = JSON.parse(currentServerToolInput || "{}");
+                } catch {
+                  currentServerToolUse.input = {};
+                }
+                serverToolUses.push(currentServerToolUse);
+                currentServerToolUse = null;
+                currentServerToolInput = "";
               }
+              currentBlockType = null;
               break;
 
             case "message_delta":
@@ -313,6 +447,10 @@ export class AnthropicProvider extends BaseLLMProvider {
               if (data.message?.usage) {
                 promptTokens = data.message.usage.input_tokens || 0;
               }
+              // Track container ID for reuse
+              if (data.message?.container?.id) {
+                this._containerId = data.message.container.id;
+              }
               break;
           }
         }
@@ -324,6 +462,8 @@ export class AnthropicProvider extends BaseLLMProvider {
     yield {
       type: "done",
       toolCalls,
+      serverToolUses,
+      codeExecutionResults,
       tokenUsage: { promptTokens, completionTokens },
     };
   }
@@ -339,8 +479,9 @@ export class AnthropicProvider extends BaseLLMProvider {
     };
     if (system) body.system = system;
     if (anthropicTools.length > 0) body.tools = anthropicTools;
+    if (this._containerId) body.container = this._containerId;
 
-    const data = await this._withRetry(async () => {
+    const respData = await this._withRetry(async () => {
       const resp = await fetch(`${this.baseURL}/v1/messages`, {
         method: "POST",
         headers: this._headers(),
@@ -358,14 +499,22 @@ export class AnthropicProvider extends BaseLLMProvider {
       return resp.json();
     }, MAX_RETRIES, onRetry);
 
-    const { text, toolCalls } = this._parseResponseContent(data.content);
+    // Track container ID for reuse
+    if (respData.container?.id) {
+      this._containerId = respData.container.id;
+    }
 
-    return {
-      message: {
-        content: text,
-        tool_calls: toolCalls,
-      },
+    const { text, toolCalls, serverToolUses, codeExecutionResults } =
+      this._parseResponseContent(respData.content);
+
+    const message = {
+      content: text,
+      tool_calls: toolCalls,
     };
+    if (serverToolUses.length > 0) message._serverToolUses = serverToolUses;
+    if (codeExecutionResults.length > 0) message._codeExecutionResults = codeExecutionResults;
+
+    return { message };
   }
 
   async listModels() {

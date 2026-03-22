@@ -31,12 +31,13 @@ export function getJailDirectory() {
 const CORE_TOOLS = new Set([
   "read_file", "write_file", "replace_in_file",
   "list_files", "grep", "run_command", "ask_user",
+  "code_execution",
 ]);
 
 // Tools that can modify the filesystem or execute arbitrary code.
 // These require user approval before execution (unless auto-approve is on).
 const DANGEROUS_TOOLS = new Set([
-  "write_file", "replace_in_file", "run_command",
+  "write_file", "replace_in_file", "run_command", "code_execution",
 ]);
 
 // Approval categories for granular auto-approve (Aider/Kilocode pattern)
@@ -74,6 +75,7 @@ const TOOL_CATEGORIES = {
   link_repos: "safe",
   set_snippet: "safe",
   find_agent_for_task: "safe",
+  code_execution: "execute",
 };
 
 /**

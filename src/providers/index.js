@@ -89,9 +89,10 @@ const PROVIDER_PRESETS = {
  * @param {string} [options.model]     - Model name
  * @param {string} [options.host]      - Host URL (Ollama) or base URL
  * @param {string} [options.apiKey]    - API key
+ * @param {boolean} [options.programmaticToolCalling] - Enable programmatic tool calling
  * @returns {import('./base.js').BaseLLMProvider}
  */
-export function createProvider({ provider, model, host, apiKey } = {}) {
+export function createProvider({ provider, model, host, apiKey, programmaticToolCalling } = {}) {
   const rawProvider = provider || process.env.SMOL_AGENT_PROVIDER || "ollama";
   const providerName = rawProvider.toLowerCase();
 
@@ -104,6 +105,7 @@ export function createProvider({ provider, model, host, apiKey } = {}) {
       host,
       baseURL: host, // host doubles as baseURL for non-Ollama providers
       apiKey: key,
+      programmaticToolCalling,
     });
   }
 
