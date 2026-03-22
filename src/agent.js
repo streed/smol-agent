@@ -38,6 +38,7 @@ import "./tools/git.js";
 import "./tools/session_tools.js";
 import "./tools/cross_agent.js";
 import "./tools/code_execution.js";
+import { setActivateGroupCallback } from "./tools/discover_tools.js";
 
 // ── Thinking tags parser ─────────────────────────────────────────────
 
@@ -313,6 +314,18 @@ export class Agent extends EventEmitter {
     // Architect mode — two-pass planning/execution (Aider/Kilocode pattern)
     this._architectMode = false;
 
+    // Progressive tool discovery — start with starter groups, unlock more on demand.
+    // When coreToolsOnly is true (small models), progressive discovery is disabled
+    // and the agent only gets the 7 core tools as before.
+    // When coreToolsOnly is false (large models/cloud), progressive discovery is
+    // active: the agent starts with starter groups + discover_tools meta-tool,
+    // and can unlock additional groups as needed.
+    this._progressiveDiscovery = !this.coreToolsOnly;
+    this._activeToolGroups = new Set(registry.getStarterGroups());
+
+    // Wire up the discover_tools callback so it can mutate our active groups
+    setActivateGroupCallback((groups) => this._activateToolGroups(groups));
+
     // Cross-agent response watcher — notifies this agent when replies arrive
     this._responseWatcher = null;
 
@@ -395,6 +408,111 @@ export class Agent extends EventEmitter {
    */
   getApprovedCategories() {
     return new Set(this._approvedCategories);
+  }
+
+  // ── Progressive Tool Discovery ────────────────────────────────────
+
+  /**
+   * Activate tool groups (called by discover_tools meta-tool).
+   * @param {string[]} groups - Group names to activate
+   * @returns {{ activated: string[], alreadyActive: string[], unknown: string[] }}
+   */
+  _activateToolGroups(groups) {
+    const allGroups = registry.getToolGroups();
+    const activated = [];
+    const alreadyActive = [];
+    const unknown = [];
+
+    for (const g of groups) {
+      if (!allGroups[g]) {
+        unknown.push(g);
+      } else if (this._activeToolGroups.has(g)) {
+        alreadyActive.push(g);
+      } else {
+        this._activeToolGroups.add(g);
+        activated.push(g);
+        logger.info(`Progressive discovery: activated tool group "${g}"`);
+      }
+    }
+
+    return { activated, alreadyActive, unknown };
+  }
+
+  /**
+   * Auto-discover tool groups based on context signals in the user message
+   * or tool usage patterns. This avoids requiring the model to explicitly
+   * call discover_tools for obvious cases.
+   * @param {string} text - User message or current context
+   */
+  _autoDiscoverFromContext(text) {
+    if (!this._progressiveDiscovery) return;
+    if (!text) return;
+
+    const lower = text.toLowerCase();
+
+    // Plan group — complex tasks, multi-step work
+    if (!this._activeToolGroups.has("plan")) {
+      const planSignals = [
+        "plan", "step by step", "multi-step", "break down",
+        "implement", "build", "refactor", "migrate",
+        "architecture", "design",
+      ];
+      if (planSignals.some(s => lower.includes(s))) {
+        this._activateToolGroups(["plan"]);
+        logger.info("Auto-discovered plan group from context");
+      }
+    }
+
+    // Memory group — references to persistence, previous sessions
+    if (!this._activeToolGroups.has("memory")) {
+      const memorySignals = [
+        "remember", "recall", "previous session", "last time",
+        "memory", "save context", "knowledge base",
+      ];
+      if (memorySignals.some(s => lower.includes(s))) {
+        this._activateToolGroups(["memory"]);
+        logger.info("Auto-discovered memory group from context");
+      }
+    }
+
+    // Web group — search/fetch needs
+    if (!this._activeToolGroups.has("web")) {
+      const webSignals = [
+        "search", "look up", "find online", "documentation",
+        "web", "url", "http", "api docs", "latest version",
+        "fetch", "download",
+      ];
+      if (webSignals.some(s => lower.includes(s))) {
+        this._activateToolGroups(["web"]);
+        logger.info("Auto-discovered web group from context");
+      }
+    }
+
+    // Multi-agent group — delegation and cross-agent communication
+    if (!this._activeToolGroups.has("multi_agent")) {
+      const agentSignals = [
+        "delegate", "sub-agent", "other agent", "agent",
+        "letter", "inbox", "send to", "coordinate",
+      ];
+      if (agentSignals.some(s => lower.includes(s))) {
+        this._activateToolGroups(["multi_agent"]);
+        logger.info("Auto-discovered multi_agent group from context");
+      }
+    }
+  }
+
+  /**
+   * Get the current tools array based on progressive discovery state.
+   * When progressive discovery is active, returns tools from active groups
+   * plus the discover_tools meta-tool. Otherwise falls back to the
+   * coreToolsOnly/all-tools behavior.
+   */
+  _getCurrentTools() {
+    if (!this._progressiveDiscovery) {
+      return registry.getTools(this.coreToolsOnly);
+    }
+    // Get tools for active groups, plus any ungrouped tools (e.g. session tools)
+    return registry.getToolsForGroups(this._activeToolGroups, /* includeUngrouped */ true);
   }
 
   /**
@@ -508,8 +626,8 @@ export class Agent extends EventEmitter {
     } catch { /* proceed without context */ }
 
     // Build compact tool schema block so the model knows the available API
-    const allTools = registry.getTools(this.coreToolsOnly);
-    const toolLines = allTools.map(t => {
+    const currentTools = this._getCurrentTools();
+    const toolLines = currentTools.map(t => {
       const fn = t.function;
       const params = fn.parameters?.properties || {};
       const paramList = Object.entries(params)
@@ -520,11 +638,20 @@ export class Agent extends EventEmitter {
     });
     const toolSchemaBlock = `\n\n## Available tools\n${toolLines.join('\n')}`;
 
-    // List extended tools so the model knows they exist but isn't overwhelmed
-    const extended = registry.extendedToolNames();
-    const extendedNote = extended.length > 0
-      ? `\n\nAdditional tools available if needed: ${extended.join(", ")}`
-      : "";
+    // Progressive discovery: describe inactive groups so the model knows
+    // it can unlock more tools. Falls back to the old "extended tools" note.
+    let extendedNote = "";
+    if (this._progressiveDiscovery) {
+      const inactive = registry.describeInactiveGroups(this._activeToolGroups);
+      if (inactive) {
+        extendedNote = `\n\n## Additional tool groups\nCall **discover_tools** to activate any of these groups when needed:\n${inactive}`;
+      }
+    } else {
+      const extended = registry.extendedToolNames();
+      if (extended.length > 0) {
+        extendedNote = `\n\nAdditional tools available if needed: ${extended.join(", ")}`;
+      }
+    }
 
     // Load active plan if one exists
     let planBlock = "";
@@ -697,7 +824,12 @@ export class Agent extends EventEmitter {
       onProgress: (e) => this.emit("cross_agent_progress", e),
     });
 
-    const tools = registry.getTools(this.coreToolsOnly);
+    // Progressive discovery: auto-detect tool groups from the user message
+    this._autoDiscoverFromContext(userMessage);
+
+    // Fetch tools dynamically — re-evaluated each iteration when progressive
+    // discovery is active (groups may be activated mid-run via discover_tools).
+    let tools = this._getCurrentTools();
     let iterations = 0;
     let consecutiveAgentRetries = 0;
     let overflowRetries = 0;
@@ -714,6 +846,11 @@ export class Agent extends EventEmitter {
 
     while (iterations++ < 200) {
       try {
+        // ── Refresh tools if groups changed (progressive discovery) ──
+        if (this._progressiveDiscovery) {
+          tools = this._getCurrentTools();
+        }
+
         // ── Flush any injected user messages ──
         while (this._pendingInjections.length > 0) {
           const injected = this._pendingInjections.shift();

@@ -4,7 +4,13 @@
  */
 
 import { describe, test, expect, beforeEach } from '@jest/globals';
-import registry from '../../src/tools/registry.js';
+import registry, {
+  getStarterGroups,
+  getToolGroups,
+  getInactiveGroups,
+  getToolsForGroups,
+  describeInactiveGroups,
+} from '../../src/tools/registry.js';
 
 // Reset registry state between tests
 function setupRegistry() {
@@ -192,6 +198,99 @@ describe('requiresApproval', () => {
 
   test('read_file does not require approval', () => {
     expect(registry.requiresApproval('read_file')).toBe(false);
+  });
+});
+
+// ── Progressive Tool Discovery ──────────────────────────────────────
+
+describe('progressive discovery: tool groups', () => {
+  test('getStarterGroups returns expected starter groups', () => {
+    const starters = getStarterGroups();
+    expect(starters).toContain('explore');
+    expect(starters).toContain('edit');
+    expect(starters).toContain('execute');
+    expect(starters).not.toContain('plan');
+    expect(starters).not.toContain('web');
+  });
+
+  test('getToolGroups returns all group definitions', () => {
+    const groups = getToolGroups();
+    expect(groups).toHaveProperty('explore');
+    expect(groups).toHaveProperty('edit');
+    expect(groups).toHaveProperty('execute');
+    expect(groups).toHaveProperty('plan');
+    expect(groups).toHaveProperty('memory');
+    expect(groups).toHaveProperty('web');
+    expect(groups).toHaveProperty('multi_agent');
+
+    // Each group has tools array and description
+    for (const [, group] of Object.entries(groups)) {
+      expect(Array.isArray(group.tools)).toBe(true);
+      expect(group.tools.length).toBeGreaterThan(0);
+      expect(typeof group.description).toBe('string');
+    }
+  });
+
+  test('getInactiveGroups returns groups not in active set', () => {
+    const active = new Set(['explore', 'edit', 'execute']);
+    const inactive = getInactiveGroups(active);
+    expect(inactive).toContain('plan');
+    expect(inactive).toContain('memory');
+    expect(inactive).toContain('web');
+    expect(inactive).toContain('multi_agent');
+    expect(inactive).not.toContain('explore');
+    expect(inactive).not.toContain('edit');
+  });
+
+  test('getToolsForGroups returns only tools from active groups', () => {
+    // Register some test tools that match group definitions
+    const groups = getToolGroups();
+    const exploreTool = groups.explore.tools[0]; // e.g. "read_file"
+    const editTool = groups.edit.tools[0];       // e.g. "write_file"
+
+    // These tools may already be registered by other imports, or may not be.
+    // Register them explicitly for this test.
+    registry.register(exploreTool, {
+      description: 'test explore tool', parameters: {}, execute: async () => 'ok',
+    });
+    registry.register(editTool, {
+      description: 'test edit tool', parameters: {}, execute: async () => 'ok',
+    });
+
+    const active = new Set(['explore']);
+    const tools = getToolsForGroups(active);
+    const names = tools.map(t => t.function.name);
+
+    // Should include explore tools, not edit tools
+    expect(names).toContain(exploreTool);
+    expect(names).not.toContain(editTool);
+  });
+
+  test('getToolsForGroups includes ungrouped tools when flag is set', () => {
+    const active = new Set(['explore']);
+    const withUngrouped = getToolsForGroups(active, true);
+    const withoutUngrouped = getToolsForGroups(active, false);
+
+    // Ungrouped tools should make the list longer
+    expect(withUngrouped.length).toBeGreaterThanOrEqual(withoutUngrouped.length);
+  });
+
+  test('describeInactiveGroups generates description for inactive groups', () => {
+    const active = new Set(['explore', 'edit', 'execute']);
+    const desc = describeInactiveGroups(active);
+
+    expect(desc).toContain('plan');
+    expect(desc).toContain('memory');
+    expect(desc).toContain('web');
+    expect(desc).toContain('multi_agent');
+    expect(desc).not.toContain('explore');
+  });
+
+  test('describeInactiveGroups returns empty when all groups active', () => {
+    const allGroups = Object.keys(getToolGroups());
+    const active = new Set(allGroups);
+    const desc = describeInactiveGroups(active);
+    expect(desc).toBe('');
   });
 });
 
