@@ -15,7 +15,7 @@
  */
 
 import vm from "node:vm";
-import { register, getTools, execute as executeRegisteredTool, getJailDirectory } from "./registry.js";
+import { register, getTools, execute as executeRegisteredTool } from "./registry.js";
 import { logger } from "../logger.js";
 
 /** Maximum execution time for code (ms) */
@@ -140,7 +140,7 @@ register("code_execution", {
     },
   },
   core: true,
-  async execute({ code }, { cwd } = {}) {
+  async execute({ code }, { cwd: _cwd } = {}) {
     if (!code || typeof code !== "string") {
       return { error: "code must be a non-empty string" };
     }

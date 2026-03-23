@@ -355,7 +355,7 @@ if (acpMode) {
   // Write JSONL progress events to the given fd using synchronous writes
   // (fs.createWriteStream(null, { fd }) throws in Node 18+ since null isn't a valid path)
   const writeProgress = (event) => {
-    try { fs.writeSync(progressFd, JSON.stringify(event) + "\n"); } catch {}
+    try { fs.writeSync(progressFd, JSON.stringify(event) + "\n"); } catch { /* ignore write errors */ }
   };
   agent.on("tool_call", ({ name, args }) => writeProgress({ type: "tool_call", name, args }));
   agent.on("tool_result", ({ name, result }) => writeProgress({ type: "tool_result", name, success: !result?.error }));

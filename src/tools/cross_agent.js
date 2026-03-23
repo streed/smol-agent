@@ -34,7 +34,6 @@ import {
 import {
   findAgent,
   listAgents,
-  registerAgent,
   addRelation,
   getRelatedAgents,
   updateAgent,
@@ -466,7 +465,7 @@ register("list_agents", {
       },
     },
   },
-  async execute(args, { cwd }) {
+  async execute(args, { cwd: _cwd }) {
     try {
       const filter = {};
       if (args.role) filter.role = args.role;

@@ -421,7 +421,7 @@ describe("cross-agent protocol", () => {
 
     it("skips delivery to unregistered sender (no throw)", () => {
       const { sendLetter, sendReply, readInbox, checkForReply } = mods.crossAgent;
-      const { id } = sendLetter({
+      const { id: _id } = sendLetter({
         from: repoA,
         to: repoB,
         title: "Test",

@@ -1,5 +1,4 @@
-import { jest } from "@jest/globals";
-import { register, execute, setJailDirectory } from "../../src/tools/registry.js";
+import { register as _register, execute, setJailDirectory } from "../../src/tools/registry.js";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";

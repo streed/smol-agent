@@ -53,8 +53,8 @@ export async function run() {
 
     // Verify the params documented match the actual function params
     const docsPriceParam = /@param\s*\{[^}]*\}\s*price/.test(content) || /@param\s+price/.test(content);
-    const docsCustomerParam = /@param\s*\{[^}]*\}\s*customerType/.test(content) || /@param\s+customerType/.test(content);
-    const docsQuantityParam = /@param\s*\{[^}]*\}\s*quantity/.test(content) || /@param\s+quantity/.test(content);
+    const _docsCustomerParam = /@param\s*\{[^}]*\}\s*customerType/.test(content) || /@param\s+customerType/.test(content);
+    const _docsQuantityParam = /@param\s*\{[^}]*\}\s*quantity/.test(content) || /@param\s+quantity/.test(content);
 
     // Function still works
     const functionIntact = /function calculateDiscount\s*\(price,\s*customerType,\s*quantity\)/.test(content);

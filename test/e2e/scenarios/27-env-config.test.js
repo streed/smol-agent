@@ -42,11 +42,11 @@ export async function run() {
     const hasApiKeyExample = /API_KEY/.test(envExampleContent);
 
     // Hardcoded values should be removed
-    const noHardcodedHost = !configContent.includes('"localhost"') || /process\.env/.test(configContent);
+    const _noHardcodedHost = !configContent.includes('"localhost"') || /process\.env/.test(configContent);
     const noHardcodedKey = !configContent.includes('"hardcoded-secret-key"');
 
     // Check for fallback/default values (good practice)
-    const hasDefaults = /\|\|/.test(configContent) || /\?\?/.test(configContent);
+    const _hasDefaults = /\|\|/.test(configContent) || /\?\?/.test(configContent);
 
     return scoreResult(meta.name, [
       check("read config file", didRead, 1),

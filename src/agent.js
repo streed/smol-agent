@@ -17,7 +17,7 @@ import {
 } from "./sessions.js";
 import { architectPass, formatPlanForEditor } from "./architect.js";
 import { createCheckpoint, rollbackToCheckpoint, listCheckpoints, cleanupCheckpoints } from "./checkpoint.js";
-import { touchAgent, detectRepoMetadata, detectSnippet, registerAgent } from "./agent-registry.js";
+import { detectRepoMetadata, detectSnippet, registerAgent } from "./agent-registry.js";
 import { watchForResponses, clearStaleInbox } from "./cross-agent.js";
 
 // Import all tools so they self-register

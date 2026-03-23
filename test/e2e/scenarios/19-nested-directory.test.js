@@ -35,7 +35,7 @@ Make sure all parent directories are created.`,
 
     // Verify component files have function definitions and exports
     const buttonHasFunction = /function\s+Button|const\s+Button/.test(buttonContent);
-    const inputHasFunction = /function\s+Input|const\s+Input/.test(inputContent);
+    const _inputHasFunction = /function\s+Input|const\s+Input/.test(inputContent);
     const buttonHasExport = /module\.exports|export/.test(buttonContent);
 
     const allFiles = await listFiles(tmpDir);

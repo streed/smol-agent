@@ -7,7 +7,7 @@
  */
 import {
   createTestAgent, runWithTimeout, collectEvents,
-  scoreResult, check, seedFile, readResult, cleanup,
+  scoreResult, check, seedFile, cleanup,
 } from "../harness.js";
 import { config } from "../config.js";
 

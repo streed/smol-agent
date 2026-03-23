@@ -62,7 +62,7 @@ describe("cross-agent security integration", () => {
     } = mods.crossAgent;
 
     // 1. A sends a letter to B
-    const { id, letterPath } = sendLetter({
+    const { id, letterPath: _letterPath } = sendLetter({
       from: repoA,
       to: repoB,
       title: "Add /health endpoint",

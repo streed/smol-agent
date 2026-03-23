@@ -21,6 +21,7 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 REPO_URL="https://github.com/streed/smol-agent.git"
+RELEASES_API="https://api.github.com/repos/streed/smol-agent/releases"
 
 # XDG-compliant install locations
 XDG_DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
@@ -70,6 +71,25 @@ fi
 
 echo -e "${GREEN}✓${NC} git $(git --version | cut -d' ' -f3) detected"
 
+# Check if curl is available (needed for version checking)
+if ! command -v curl &> /dev/null; then
+    echo -e "${RED}Error: curl is not installed${NC}"
+    exit 1
+fi
+
+# Function to get latest release version from GitHub API
+get_latest_version() {
+    # Try to get the latest release version from GitHub API
+    LATEST_VERSION=$(curl -fsSL "$RELEASES_API/latest" 2>/dev/null | grep -m1 '"tag_name"' | sed 's/.*"tag_name"[[:space:]]*:[[:space:]]*"v\?\([^"]*\)".*/\1/' || echo "")
+    
+    if [ -z "$LATEST_VERSION" ]; then
+        # Fallback: try to get version from package.json in main branch
+        LATEST_VERSION=$(curl -fsSL "https://raw.githubusercontent.com/streed/smol-agent/main/package.json" 2>/dev/null | grep '"version"' | sed 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/' || echo "")
+    fi
+    
+    echo "$LATEST_VERSION"
+}
+
 # Determine if we're running from within the repo or via curl
 if [ -f "package.json" ] && grep -q '"name": "smol-agent"' package.json 2>/dev/null; then
     # Running from within the repo - get the repo root
@@ -83,6 +103,21 @@ else
     # Running via curl | sh or from outside the repo
     INSTALL_TYPE="curl-sh"
     INSTALL_SOURCE="$INSTALL_DIR"
+    
+    echo ""
+    echo -e "${YELLOW}Fetching latest release version...${NC}"
+    
+    # Get latest version
+    LATEST_VERSION=$(get_latest_version)
+    
+    if [ -n "$LATEST_VERSION" ]; then
+        echo -e "${GREEN}✓${NC} Latest version: v$LATEST_VERSION"
+        VERSION_TAG="v$LATEST_VERSION"
+    else
+        echo -e "${YELLOW}Warning: Could not determine latest version, using main branch${NC}"
+        VERSION_TAG="main"
+    fi
+    
     echo ""
     echo -e "${YELLOW}Cloning smol-agent...${NC}"
     
@@ -95,8 +130,12 @@ else
         rm -rf "$INSTALL_DIR"
     fi
     
-    # Clone the repository
-    git clone --depth 1 "$REPO_URL" "$INSTALL_DIR"
+    # Clone the repository at the specific version
+    if [ "$VERSION_TAG" != "main" ]; then
+        git clone --depth 1 --branch "$VERSION_TAG" "$REPO_URL" "$INSTALL_DIR"
+    else
+        git clone --depth 1 "$REPO_URL" "$INSTALL_DIR"
+    fi
     cd "$INSTALL_DIR"
     echo -e "${GREEN}✓${NC} Cloned to $INSTALL_DIR"
 fi
@@ -116,18 +155,23 @@ INSTALL_TYPE=$INSTALL_TYPE
 INSTALL_SOURCE=$INSTALL_SOURCE
 INSTALL_DIR=$INSTALL_DIR
 INSTALLED_AT=$(date -Iseconds)
+INSTALLED_VERSION=$(node -p "require('./package.json').version" 2>/dev/null || echo "unknown")
 EOF
 
 # Check if the link was successful
 if command -v smol-agent &> /dev/null; then
+    INSTALLED_VERSION=$(node -p "require('./package.json').version" 2>/dev/null || echo "unknown")
+    
     echo ""
     echo -e "${GREEN}════════════════════════════════════════${NC}"
-    echo -e "${GREEN}  Installation successful!${NC}"
+    echo -e "${GREEN}  Installation successful!                ${NC}"
     echo -e "${GREEN}════════════════════════════════════════${NC}"
+    echo ""
+    echo "  Version: v$INSTALLED_VERSION"
     echo ""
     echo "Run smol-agent with:"
     echo "  smol-agent                  # interactive mode"
-    echo "  smol-agent \"your prompt\"   # one-shot mode"
+    echo "  smol-agent \"your prompt\"    # one-shot mode"
     echo ""
     echo "Options:"
     echo "  -m, --model <name>   Ollama model to use"

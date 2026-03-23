@@ -177,7 +177,7 @@ created_at: 2025-01-01T00:00:00Z
       const { crossAgent } = await loadModules();
 
       // Send a letter with a non-existent "from" path
-      const { id } = crossAgent.sendLetter({
+      const { id: _id } = crossAgent.sendLetter({
         from: tmpRepoA,
         to: tmpRepoB,
         title: "Test",
@@ -206,7 +206,7 @@ created_at: 2025-01-01T00:00:00Z
       const { crossAgent } = await loadModules();
 
       // Send a letter, then reply to it
-      const { id } = crossAgent.sendLetter({
+      const { id: _id2 } = crossAgent.sendLetter({
         from: tmpRepoA,
         to: tmpRepoB,
         title: "Mixed test",

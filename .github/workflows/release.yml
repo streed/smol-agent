@@ -1,0 +1,287 @@
+name: Release
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+jobs:
+  check-release:
+    name: Check if Release Required
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.merged == true
+    outputs:
+      should_release: ${{ steps.check.outputs.should_release }}
+      pr_number: ${{ steps.check.outputs.pr_number }}
+      pr_title: ${{ steps.check.outputs.pr_title }}
+      pr_body: ${{ steps.check.outputs.pr_body }}
+    steps:
+      - name: Check for release label
+        id: check
+        run: |
+          # Check if the PR has the "release" label
+          LABELS='${{ toJson(github.event.pull_request.labels) }}'
+          HAS_RELEASE=$(echo "$LABELS" | jq -r 'any(.[]; .name == "release")')
+          
+          if [ "$HAS_RELEASE" == "true" ]; then
+            echo "✅ PR has 'release' label, will create release"
+            echo "should_release=true" >> $GITHUB_OUTPUT
+          else
+            echo "⏭️ PR does not have 'release' label, skipping release"
+            echo "should_release=false" >> $GITHUB_OUTPUT
+          fi
+          
+          echo "pr_number=${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
+          PR_TITLE='${{ github.event.pull_request.title }}'
+          PR_BODY='${{ github.event.pull_request.body }}'
+          # Escape for GitHub Actions
+          echo "pr_title<<EOF" >> $GITHUB_OUTPUT
+          echo "$PR_TITLE" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+          echo "pr_body<<EOF" >> $GITHUB_OUTPUT
+          echo "$PR_BODY" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+  release:
+    name: Create Release
+    needs: check-release
+    if: needs.check-release.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4
+        with:
+          node-version: '20'
+
+      - name: Install Ollama
+        uses: ollama/setup-ollama@v1
+        with:
+          model: qwen2.5-coder:7b
+
+      - name: Wait for Ollama
+        run: |
+          sleep 10
+          curl --retry 10 --retry-delay 5 --retry-connrefused http://127.0.0.1:11434/api/tags
+
+      - name: Get current version
+        id: current_version
+        run: |
+          CURRENT_VERSION=$(node -p "require('./package.json').version")
+          echo "version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
+          echo "Current version: $CURRENT_VERSION"
+
+      - name: Check if tag exists
+        id: check_tag
+        run: |
+          CURRENT_VERSION=${{ steps.current_version.outputs.version }}
+          if git tag -l "v$CURRENT_VERSION" | grep -q .; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "Tag v$CURRENT_VERSION already exists"
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "Tag v$CURRENT_VERSION does not exist"
+          fi
+
+      - name: Determine version bump
+        id: bump
+        if: steps.check_tag.outputs.exists == 'false'
+        run: |
+          # Get commits since last tag
+          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          
+          if [ -z "$LAST_TAG" ]; then
+            # No previous tag - use current package.json version
+            NEW_VERSION=${{ steps.current_version.outputs.version }}
+            echo "No previous tag found, using package.json version"
+          else
+            COMMITS=$(git log $LAST_TAG..HEAD --oneline)
+            echo "Commits since $LAST_TAG:"
+            echo "$COMMITS"
+            
+            # Check for breaking changes (feat!: or fix!: or BREAKING CHANGE)
+            if echo "$COMMITS" | grep -qE '^[a-f0-9]+ (feat|fix)!:' || echo "$COMMITS" | grep -q 'BREAKING CHANGE'; then
+              BUMP="major"
+            # Check for new features
+            elif echo "$COMMITS" | grep -qE '^[a-f0-9]+ feat:'; then
+              BUMP="minor"
+            # Default to patch
+            else
+              BUMP="patch"
+            fi
+            
+            # Parse current version
+            CURRENT=${{ steps.current_version.outputs.version }}
+            MAJOR=$(echo $CURRENT | cut -d. -f1)
+            MINOR=$(echo $CURRENT | cut -d. -f2)
+            PATCH=$(echo $CURRENT | cut -d. -f3)
+            
+            case $BUMP in
+              major)
+                NEW_VERSION="$((MAJOR + 1)).0.0"
+                ;;
+              minor)
+                NEW_VERSION="$MAJOR.$((MINOR + 1)).0"
+                ;;
+              patch)
+                NEW_VERSION="$MAJOR.$MINOR.$((PATCH + 1))"
+                ;;
+            esac
+          fi
+          
+          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
+          echo "New version: $NEW_VERSION"
+
+      - name: Get commits since last release
+        id: commits
+        if: steps.check_tag.outputs.exists == 'false'
+        run: |
+          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          
+          if [ -n "$LAST_TAG" ]; then
+            COMMITS=$(git log $LAST_TAG..HEAD --pretty=format:"%H|%s|%an")
+          else
+            COMMITS=$(git log --pretty=format:"%H|%s|%an" -20)
+          fi
+          
+          # Save commits to file for Ollama processing
+          echo "$COMMITS" > commits.txt
+          
+          # Create detailed commit list for changelog
+          if [ -n "$LAST_TAG" ]; then
+            git log $LAST_TAG..HEAD --pretty=format:"- %s (%h) by %an" > commit-log.txt
+          else
+            git log --pretty=format:"- %s (%h) by %an" -20 > commit-log.txt
+          fi
+          
+          echo "Commits saved to commits.txt"
+
+      - name: Generate release summary with Ollama
+        id: summary
+        if: steps.check_tag.outputs.exists == 'false'
+        env:
+          NEW_VERSION: ${{ steps.bump.outputs.new_version }}
+          PR_TITLE: ${{ needs.check-release.outputs.pr_title }}
+          PR_BODY: ${{ needs.check-release.outputs.pr_body }}
+        run: |
+          # Create prompt for Ollama
+          cat > prompt.txt << EOF
+          You are a technical writer creating release notes for a software project.
+          Write a clear, concise release summary in markdown format.
+          
+          The release version is: v${NEW_VERSION}
+          The PR title is: ${PR_TITLE}
+          
+          PR description:
+          ${PR_BODY}
+          
+          Recent commits:
+          EOF
+          
+          cat commit-log.txt >> prompt.txt
+          
+          cat >> prompt.txt << EOF
+          
+          Write a release summary with:
+          1. A brief introduction (2-3 sentences)
+          2. Key changes as bullet points (max 10)
+          3. Contributors if mentioned in commits
+          
+          Keep it professional and concise. Do not include code blocks.
+          EOF
+          
+          # Generate summary with Ollama
+          ollama run qwen2.5-coder:7b "$(cat prompt.txt)" > ollama-summary.txt 2>/dev/null || true
+          
+          # If Ollama fails, use a simple summary
+          if [ ! -s ollama-summary.txt ]; then
+            echo "This release includes the following changes:" > ollama-summary.txt
+            head -5 commit-log.txt >> ollama-summary.txt
+          fi
+          
+          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          
+          # Create final changelog
+          {
+            echo "# Release v${NEW_VERSION}"
+            echo ""
+            echo "## Summary"
+            echo ""
+            cat ollama-summary.txt
+            echo ""
+            echo "## Changes"
+            echo ""
+            cat commit-log.txt
+            echo ""
+            echo ""
+            if [ -n "$LAST_TAG" ]; then
+              echo "**Full Changelog**: https://github.com/${{ github.repository }}/compare/${LAST_TAG}...v${NEW_VERSION}"
+            else
+              echo "**Full Changelog**: https://github.com/${{ github.repository }}/commits/v${NEW_VERSION}"
+            fi
+          } > changelog.md
+          
+          echo "Generated changelog:"
+          cat changelog.md
+
+      - name: Update package.json version
+        if: steps.check_tag.outputs.exists == 'false'
+        run: |
+          NEW_VERSION=${{ steps.bump.outputs.new_version }}
+          node -e "const fs = require('fs'); const pkg = JSON.parse(fs.readFileSync('package.json')); pkg.version = '$NEW_VERSION'; fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n')"
+          echo "Updated package.json to version $NEW_VERSION"
+
+      - name: Commit version update
+        if: steps.check_tag.outputs.exists == 'false'
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add package.json
+          git commit -m "chore: bump version to v${{ steps.bump.outputs.new_version }} [skip ci]"
+          git push
+
+      - name: Create tag
+        if: steps.check_tag.outputs.exists == 'false'
+        run: |
+          NEW_VERSION=${{ steps.bump.outputs.new_version }}
+          git tag -a "v$NEW_VERSION" -m "Release v$NEW_VERSION"
+          git push origin "v$NEW_VERSION"
+
+      - name: Create GitHub Release
+        if: steps.check_tag.outputs.exists == 'false'
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c379c032f # v7
+        with:
+          script: |
+            const fs = require('fs');
+            const changelog = fs.readFileSync('changelog.md', 'utf8');
+            const newVersion = '${{ steps.bump.outputs.new_version }}';
+            
+            await github.rest.repos.createRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag_name: `v${newVersion}`,
+              name: `v${newVersion}`,
+              body: changelog,
+              draft: false,
+              prerelease: false
+            });
+
+      - name: Release Summary
+        if: steps.check_tag.outputs.exists == 'false'
+        run: |
+          echo "✅ Released v${{ steps.bump.outputs.new_version }}"
+          echo "📝 Changelog:"
+          cat changelog.md
+
+      - name: Skip Release
+        if: steps.check_tag.outputs.exists == 'true'
+        run: |
+          echo "⏭️ Tag v${{ steps.current_version.outputs.version }} already exists, skipping release"

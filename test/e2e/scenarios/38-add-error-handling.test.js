@@ -78,7 +78,7 @@ Keep the happy path behavior unchanged. Do NOT modify the return values for vali
       /_next_id/.test(content);
 
     // Name validation — checks for empty/missing name
-    const createUserSection = content.match(/def\s+create_user[\s\S]*?(?=\ndef\s|\Z)/)?.[0] || "";
+    const createUserSection = content.match(/def\s+create_user[\s\S]*?(?=\ndef\s|$)/)?.[0] || "";
     const hasNameValidation = /not\s+.*\bname\b/.test(createUserSection) ||
       /len\s*\(.*name/.test(createUserSection) ||
       /strip\s*\(\s*\)/.test(createUserSection) ||

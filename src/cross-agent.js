@@ -415,13 +415,13 @@ export function enforceInboxLimits(repoPath) {
       try {
         fs.unlinkSync(file.path);
         deleted++;
-      } catch {}
+      } catch { /* ignore unlink errors */ }
     }
 
     if (deleted > 0) {
       logger.info(`Inbox limits: deleted ${deleted} old cleared file(s)`);
     }
-  } catch {}
+  } catch { /* ignore errors during cleanup */ }
 }
 
 // ── Core operations ───────────────────────────────────────────────────
@@ -543,7 +543,7 @@ export function sendReply({
       replyPath = path.join(senderInbox, `${originalLetter.id}.response.md`);
       atomicWriteFileSync(replyPath, markdown);
       logger.info(`Reply delivered to ${originalLetter.from}`);
-    } catch (err) {
+    } catch (_err) {
       logger.warn(`Skipping reply delivery to unregistered sender: ${originalLetter.from}`);
     }
   }
@@ -677,7 +677,7 @@ export function waitForReply({ repoPath, letterId, timeoutMs = DEFAULT_REPLY_TIM
     const cleanup = () => {
       if (settled) return;
       settled = true;
-      if (watcher) { try { watcher.close(); } catch {} }
+      if (watcher) { try { watcher.close(); } catch { /* ignore */ } }
       if (timer) clearTimeout(timer);
       if (pollInterval) clearInterval(pollInterval);
       if (signal) signal.removeEventListener("abort", onAbort);
@@ -782,7 +782,7 @@ export function watchForResponses({ repoPath, onResponse, signal }) {
   try {
     const files = fs.readdirSync(inboxDir).filter(f => f.endsWith(".response.md"));
     for (const f of files) seen.add(f);
-  } catch {}
+  } catch { /* ignore if inbox doesn't exist yet */ }
 
   const watcher = fs.watch(inboxDir, async (eventType, filename) => {
     if (!filename || !filename.endsWith(".response.md")) return;
@@ -822,7 +822,7 @@ export function watchForResponses({ repoPath, onResponse, signal }) {
           logger.warn(`Failed to parse response ${filename}: ${err.message}`);
         }
       }
-    } catch {}
+    } catch { /* ignore poll errors */ }
   }, 30000);
 
   const stopAll = () => {
@@ -923,7 +923,7 @@ export function watchInbox({
         (f) => f.endsWith(".letter.md") && !processing.has(f),
       );
       for (const f of files) handleFile(f);
-    } catch {}
+    } catch { /* ignore poll errors */ }
   }, 30000);
 
   const stopAll = () => {
