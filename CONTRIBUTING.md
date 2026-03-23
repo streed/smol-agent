@@ -11,6 +11,7 @@ Thank you for your interest in contributing to smol-agent! We welcome contributi
 - [Coding Standards](#coding-standards)
 - [Commit Messages](#commit-messages)
 - [Pull Requests](#pull-requests)
+- [Release Process](#release-process)
 - [Reporting Issues](#reporting-issues)
 
 ## Code of Conduct
@@ -88,6 +89,36 @@ Example: `feat: add support for custom system prompts`
 3. **Tests**: Add tests for new functionality when possible
 4. **Documentation**: Update README.md and AGENT.md as needed
 5. **Self-review**: Review your own changes before submitting
+
+## Release Process
+
+Releases are automated via GitHub Actions. When a PR is merged to `main`:
+
+1. **Automatic Versioning**: If the PR has the `release` label, a new version is automatically created
+2. **Version Bump**: The version is determined by PR labels:
+   - `major` label → Major version bump (breaking changes)
+   - `minor` label → Minor version bump (new features)
+   - `patch` label → Patch version bump (bug fixes)
+   - No version label → Patch version by default
+3. **Changelog**: The PR title and body are used for the release notes
+4. **NPM Publish**: The package is automatically published to npm
+
+### Creating a Release
+
+1. Create a PR with your changes
+2. Add the `release` label to the PR
+3. (Optional) Add a version label (`major`, `minor`, or `patch`)
+4. Merge the PR — the release workflow handles the rest
+
+### Release Workflow Details
+
+The release workflow (`.github/workflows/release.yml`):
+- Triggers when a PR with the `release` label is merged to `main`
+- Bumps the version in `package.json`
+- Creates a git tag for the new version
+- Generates release notes from the PR description
+- Publishes to npm (if configured)
+- Creates a GitHub Release with the notes
 
 ## Reporting Issues
 

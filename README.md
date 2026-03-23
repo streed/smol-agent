@@ -239,11 +239,13 @@ npm install
 npm link   # makes `smol-agent` available globally
 ```
 
-### Via npm (coming soon)
+### Via npm
 
 ```bash
 npm install -g smol-agent
 ```
+
+Releases are published automatically when PRs with the `release` label are merged to main.
 
 ## Update
 
