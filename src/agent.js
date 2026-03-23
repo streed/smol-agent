@@ -39,6 +39,7 @@ import "./tools/session_tools.js";
 import "./tools/cross_agent.js";
 import "./tools/code_execution.js";
 import { setActivateGroupCallback } from "./tools/discover_tools.js";
+import { LRUToolCache } from "./lru-tool-cache.js";
 
 // ── Thinking tags parser ─────────────────────────────────────────────
 
@@ -326,6 +327,29 @@ export class Agent extends EventEmitter {
     // Wire up the discover_tools callback so it can mutate our active groups
     setActivateGroupCallback((groups) => this._activateToolGroups(groups));
 
+    // LRU tool cache — evicts tools that haven't been used recently to free
+    // context space. Only active when progressive discovery is enabled (large models).
+    // Core/starter tools are pinned and never evicted.
+    this._lruCache = new LRUToolCache({
+      maxTools: 25, // max non-pinned tools before eviction kicks in
+      ttl: 0,       // no time-based eviction by default
+    });
+    if (this._progressiveDiscovery) {
+      // Pin all starter-group tools so they're never evicted
+      const starterGroups = registry.getToolGroups();
+      for (const groupName of registry.getStarterGroups()) {
+        const group = starterGroups[groupName];
+        if (group) this._lruCache.pinAll(group.tools);
+      }
+      // Warm starter tools into the cache
+      for (const groupName of this._activeToolGroups) {
+        const group = starterGroups[groupName];
+        if (group) {
+          for (const t of group.tools) this._lruCache.warm(t);
+        }
+      }
+    }
+
     // Cross-agent response watcher — notifies this agent when replies arrive
     this._responseWatcher = null;
 
@@ -432,6 +456,11 @@ export class Agent extends EventEmitter {
         this._activeToolGroups.add(g);
         activated.push(g);
         logger.info(`Progressive discovery: activated tool group "${g}"`);
+        // Warm newly activated tools into the LRU cache so they aren't
+        // immediately eligible for eviction
+        for (const t of allGroups[g].tools) {
+          this._lruCache.warm(t);
+        }
       }
     }
 
@@ -512,7 +541,9 @@ export class Agent extends EventEmitter {
       return registry.getTools(this.coreToolsOnly);
     }
     // Get tools for active groups, plus any ungrouped tools (e.g. session tools)
-    return registry.getToolsForGroups(this._activeToolGroups, /* includeUngrouped */ true);
+    const tools = registry.getToolsForGroups(this._activeToolGroups, /* includeUngrouped */ true);
+    // Filter out LRU-evicted tools to save context space
+    return this._lruCache.filterTools(tools);
   }
 
   /**
@@ -643,8 +674,16 @@ export class Agent extends EventEmitter {
     let extendedNote = "";
     if (this._progressiveDiscovery) {
       const inactive = registry.describeInactiveGroups(this._activeToolGroups);
+      const evictedDesc = this._lruCache.describeEvicted(registry.getToolMap());
+      const parts = [];
       if (inactive) {
-        extendedNote = `\n\n## Additional tool groups\nCall **discover_tools** to activate any of these groups when needed:\n${inactive}`;
+        parts.push(`Call **discover_tools** to activate any of these groups when needed:\n${inactive}`);
+      }
+      if (evictedDesc) {
+        parts.push(`The following tools were removed from context to save space (call them by name to re-activate):\n${evictedDesc}`);
+      }
+      if (parts.length > 0) {
+        extendedNote = `\n\n## Additional tool groups\n${parts.join('\n\n')}`;
       }
     } else {
       const extended = registry.extendedToolNames();
@@ -871,6 +910,14 @@ export class Agent extends EventEmitter {
             const pruneResult = this.contextManager.pruneMessages(this.messages);
             this.messages = pruneResult.messages;
             this.emit("token_usage", this.getTokenInfo());
+          }
+          // LRU eviction — remove unused tools to save context space
+          if (this._progressiveDiscovery) {
+            const evicted = this._lruCache.evict();
+            if (evicted.length > 0) {
+              logger.info(`LRU evicted ${evicted.length} tool(s): ${evicted.join(', ')}`);
+              this.emit("lru_eviction", { evicted, stats: this._lruCache.getStats() });
+            }
           }
         }
 
@@ -1131,6 +1178,9 @@ export class Agent extends EventEmitter {
             this.emit("tool_result", { name, result: { error: msg } });
             return { error: msg };
           }
+
+          // Touch the LRU cache so this tool stays active
+          this._lruCache.touch(name);
 
           let result = await registry.execute(name, args, { cwd: this.jailDirectory });
 
@@ -1456,6 +1506,17 @@ export class Agent extends EventEmitter {
     this._pendingInjections = [];
     this._approveAll = false;
     this._shiftLeft.reset();
+    this._lruCache.reset();
+    // Re-warm starter tools after reset
+    if (this._progressiveDiscovery) {
+      const allGroups = registry.getToolGroups();
+      for (const groupName of this._activeToolGroups) {
+        const group = allGroups[groupName];
+        if (group) {
+          for (const t of group.tools) this._lruCache.warm(t);
+        }
+      }
+    }
     // Stop the cross-agent response watcher so it doesn't inject stale replies
     // into a fresh conversation. A new watcher will be created on next _init().
     if (this._responseWatcher) {
