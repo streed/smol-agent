@@ -16,6 +16,9 @@ jobs:
       pr_title: ${{ steps.check.outputs.pr_title }}
       pr_body: ${{ steps.check.outputs.pr_body }}
     steps:
+      - name: Install jq
+        run: sudo apt-get install -y jq
+
       - name: Check for release label
         id: check
         run: |
