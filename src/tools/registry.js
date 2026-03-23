@@ -336,12 +336,18 @@ export function list() {
   return [...tools.keys()];
 }
 
+/** Return the internal tool map (read-only access for LRU cache descriptions). */
+export function getToolMap() {
+  return tools;
+}
+
 export default {
   register,
   getTools,
   ollamaTools,
   execute,
   list,
+  getToolMap,
   validateToolArgs,
   validateFilePath,
   requiresApproval,
