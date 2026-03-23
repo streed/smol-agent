@@ -55,13 +55,13 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Setup Node.js
-        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4
+        uses: actions/setup-node@v4
         with:
           node-version: '20'
 
@@ -264,7 +264,7 @@ jobs:
 
       - name: Create GitHub Release
         if: steps.check_tag.outputs.exists == 'false'
-        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c379c032f # v7
+        uses: actions/github-script@v7
         with:
           script: |
             const fs = require('fs');
