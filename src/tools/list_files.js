@@ -42,11 +42,10 @@ register("list_files", {
 
     files.sort();
 
+    // Compact result: omit pattern (already known), add summary
     return {
-      pattern,
-      count: files.length,
       files: files.slice(0, MAX_FILES),
-      truncated: files.length > MAX_FILES,
+      ...(files.length > MAX_FILES && { total: files.length }),
     };
   },
 });

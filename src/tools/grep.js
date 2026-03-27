@@ -47,7 +47,14 @@ register("grep", {
         stdio: ["pipe", "pipe", "pipe"],
       });
       const lines = stdout.trim().split("\n");
-      return { matches: lines.slice(0, MAX_MATCHES) };
+      // Compact result: truncate long lines to save tokens
+      const matches = lines.slice(0, MAX_MATCHES).map(line => {
+        if (line.length > 200) {
+          return line.slice(0, 200) + '...';
+        }
+        return line;
+      });
+      return { matches, total: lines.length };
     } catch (err) {
       if (err.status === 1) {
         return { matches: [] }; // no matches

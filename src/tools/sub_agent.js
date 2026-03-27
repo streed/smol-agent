@@ -50,7 +50,7 @@ export function setSubAgentConfig(cfg) {
 
 const READ_ONLY_TOOLS = new Set(["read_file", "list_files", "grep"]);
 const MAX_ITERATIONS = 15;
-const MAX_TOOL_RESULT_SIZE = 8000;
+const MAX_TOOL_RESULT_SIZE = 4000;
 
 /**
  * Strip <thinking>...</thinking> tags from content to save context tokens.

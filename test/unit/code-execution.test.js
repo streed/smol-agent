@@ -50,13 +50,14 @@ describe("code_execution tool", () => {
     const result = await execute("code_execution", {
       code: `
         const file = await read_file({ filePath: "hello.txt" });
-        console.log("Lines:", file.totalLines);
-        console.log("Content:", file.content);
+        const [header, ...lines] = file.content.split("\\n");
+        console.log("Lines:", lines.length);
+        console.log("First line:", lines[0]);
       `,
     });
 
     expect(result.return_code).toBe(0);
-    expect(result.stdout).toContain("Lines: 4");
+    expect(result.stdout).toContain("1\tHello, World!");
     expect(result.stdout).toContain("Hello, World!");
     expect(result.tool_calls_made).toBe(1);
     expect(result.tools_called).toContain("read_file");
@@ -181,15 +182,17 @@ describe("code_execution tool", () => {
           read_file({ filePath: "a.txt" }),
           read_file({ filePath: "b.txt" })
         ]);
-        console.log("A lines:", fileA.totalLines);
-        console.log("B lines:", fileB.totalLines);
+        const [metaA, contentA] = fileA.content.split("\\n");
+        const [metaB, contentB] = fileB.content.split("\\n");
+        console.log("A content:", contentA.split("\t")[1]);
+        console.log("B content:", contentB.split("\t")[1]);
       `,
     });
 
     expect(result.return_code).toBe(0);
     expect(result.tool_calls_made).toBe(2);
-    expect(result.stdout).toContain("A lines: 1");
-    expect(result.stdout).toContain("B lines: 1");
+    expect(result.stdout).toContain("A content: File A");
+    expect(result.stdout).toContain("B content: File B");
   });
 
   test("propagates tool errors to caller", async () => {
@@ -396,15 +399,16 @@ describe("code_execution tool", () => {
     const result = await execute("code_execution", {
       code: `
         const file = await read_file({ filePath: "hello.txt" });
-        // Content is formatted with line numbers: "1\\tHello, World!\\n2\\tLine 2..."
-        // First line is the line number prefix, then tab, then content
-        const firstLine = file.content.split("\\n")[0];
-        console.log("First line:", firstLine);
+        // Content format: "filePath:start-end/total\\n1\\tHello, World!\\n..."
+        // First line is metadata header, skip it
+        const lines = file.content.split("\\n");
+        const contentLine = lines[1]; // Skip metadata header
+        console.log("First content line:", contentLine);
       `,
     });
 
     expect(result.return_code).toBe(0);
-    // Content format is "1\tHello, World!"
-    expect(result.stdout).toContain("First line: 1\tHello, World!");
+    // Content format now has metadata header
+    expect(result.stdout).toContain("First content line: 1\tHello, World!");
   });
 });

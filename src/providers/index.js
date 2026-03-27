@@ -2,13 +2,14 @@
  * Provider factory — creates the appropriate LLM provider based on configuration.
  *
  * Provider selection:
- *   --provider ollama    → OllamaProvider (default, local)
- *   --provider openai    → OpenAICompatibleProvider (api.openai.com)
- *   --provider grok      → OpenAICompatibleProvider (api.x.ai)
- *   --provider groq      → OpenAICompatibleProvider (api.groq.com)
- *   --provider gemini    → OpenAICompatibleProvider (generativelanguage.googleapis.com)
- *   --provider anthropic → AnthropicProvider (api.anthropic.com)
- *   --provider <url>     → OpenAICompatibleProvider (custom base URL)
+ *   --provider ollama      → OllamaProvider (default, local, uses ollama npm)
+ *   --provider ollama-api  → OllamaAPIProvider (direct HTTP API, no npm dependency)
+ *   --provider openai      → OpenAICompatibleProvider (api.openai.com)
+ *   --provider grok        → OpenAICompatibleProvider (api.x.ai)
+ *   --provider groq        → OpenAICompatibleProvider (api.groq.com)
+ *   --provider gemini      → OpenAICompatibleProvider (generativelanguage.googleapis.com)
+ *   --provider anthropic   → AnthropicProvider (api.anthropic.com)
+ *   --provider <url>       → OpenAICompatibleProvider (custom base URL)
  *
  * Environment variables:
  *   SMOL_AGENT_PROVIDER     — default provider name
@@ -33,6 +34,7 @@
  */
 
 import { OllamaProvider, DEFAULT_MODEL as OLLAMA_DEFAULT_MODEL } from "./ollama.js";
+import { OllamaAPIProvider } from "./ollama-api.js";
 import { OpenAICompatibleProvider } from "./openai-compatible.js";
 import { AnthropicProvider } from "./anthropic.js";
 
@@ -86,6 +88,11 @@ const PROVIDER_PRESETS = {
     }),
     defaultModel: "gemini-2.5-pro",
     envKey: "GEMINI_API_KEY",
+  },
+  "ollama-api": {
+    factory: (opts) => new OllamaAPIProvider(opts),
+    defaultModel: OLLAMA_DEFAULT_MODEL,
+    envKey: "OLLAMA_API_KEY", // Optional — only needed for authenticated proxies
   },
   anthropic: {
     factory: (opts) => new AnthropicProvider(opts),

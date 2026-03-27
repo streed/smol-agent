@@ -175,12 +175,9 @@ register("read_file", {
       .map((line, i) => `${start + i}\t${line}`)
       .join("\n");
 
+    // Compact result: inline metadata as header to save tokens
     return {
-      filePath,
-      totalLines,
-      startLine: start,
-      endLine: end,
-      content: numbered,
+      content: `${filePath}:${start}-${end}/${totalLines}\n${numbered}`,
     };
   },
 });
@@ -235,10 +232,7 @@ register("write_file", {
 
     const lines = content.split("\n").length;
     const result = {
-      filePath,
-      action: existed ? "overwritten" : "created",
-      lines,
-      bytes: Buffer.byteLength(content, "utf-8"),
+      result: `${existed ? "overwritten" : "created"} ${filePath}: ${lines} lines, ${(Buffer.byteLength(content, "utf-8")/1024).toFixed(1)}KB`,
       _display: {
         type: existed ? "overwrite" : "new",
         filePath,
@@ -373,11 +367,7 @@ register("replace_in_file", {
     trackEditedFile(resolved);
 
     const result = {
-      filePath,
-      replacements: count,
-      matchType,
-      oldLines: oldText.split("\n").length,
-      newLines: newText.split("\n").length,
+      result: `replaced ${count} ${count !== 1 ? "matches" : "match"} in ${filePath} (old:${oldText.split("\n").length} new:${newText.split("\n").length} lines)`,
       _display: {
         type: "replace",
         filePath,

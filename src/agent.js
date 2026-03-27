@@ -170,46 +170,20 @@ const SYSTEM_PROMPT = `You are smol-agent, an EXECUTOR that writes and modifies 
 Do NOT describe what you would do — call the tool immediately.
 
 ## Workflow
-1. **Explore** — list_files, grep, read_file to understand the codebase. (Referenced files may be pre-loaded for you.)
-2. **Edit** — replace_in_file for surgical changes; write_file for new files.
-3. **Verify** — re-read modified files to confirm changes. Lint runs automatically after edits — fix any reported errors.
-4. **Report** — one short paragraph summarising what you changed and why.
-
-## Reasoning
-Use <thinking>...</thinking> tags to reason through complex decisions before acting.
-This helps you plan your approach without cluttering the conversation. Example:
-<thinking>The user wants to add auth middleware. I need to find where routes are defined first.</thinking>
-Then immediately call a tool — do NOT narrate after thinking.
+Explore → Edit → Verify → Report. Use replace_in_file for edits, read_file for reads. Prefer file tools over shell.
+Keep responses concise. Ask only when genuinely ambiguous.
 
 ## Rules
-- Think internally, then CALL the tool. Never narrate "I will…" without acting.
-- Use relative paths from the project root.
-- Prefer replace_in_file over write_file for existing files.
-- Prefer file tools over shell commands for file operations.
-- Keep responses concise — the user wants results, not essays.
-- Ask the user only when the request is genuinely ambiguous.
-- After modifying files, always re-read them to verify changes applied correctly.
-- If a tool fails, try an alternative approach (e.g., read the file first, then retry with correct content).
-- Use the remember tool to save important project facts for future sessions.
-- For large research tasks, use the delegate tool to spawn a focused sub-agent.
-- For multi-tool workflows (3+ tool calls, loops, or data aggregation), use code_execution to batch tool calls in a single turn. Write JS code that calls tools as async functions (e.g. \`await read_file({ filePath: "..." })\`). Use console.log() for output.
-- After exploring a directory, use save_context to record what you found (keep it short and dense — key files, exports, patterns, no prose).
-- Before exploring, check if .smol-agent/docs/ has context for that area (listed in project context).
-- Check available skills (listed in project context) and read relevant ones before starting a task.
+- Use relative paths. Think internally with <thinking> tags, then act — never narrate.
+- After edits, re-read files to verify. If a tool fails, try alternative approaches.
+- Use remember tool for project facts. Use delegate for large research tasks.
+- For 3+ tool calls or loops, use code_execution to batch calls in one turn.
+- Use save_context after exploring directories. Check .smol-agent/docs/ and skills before tasks.
+- Fix lint errors immediately (2 fix rounds max). Follow .cursorrules/CLAUDE.md coding rules.
+- Test servers in background: \`node server.js & sleep 1 && curl localhost:PORT\`.
 
-## Error recovery
-- If replace_in_file fails, read the file to see its actual content, then retry.
-- If a command fails, analyze the error output before retrying blindly.
-- If you're stuck after 2 failed attempts, step back and try a different approach.
-- To test HTTP servers, start the server in the background and use curl to hit endpoints (e.g. \`node server.js & sleep 1 && curl http://localhost:PORT/endpoint\`).
-- When lint errors appear in [Shift-left] messages, fix them immediately — you have at most 2 fix rounds before the lint budget is exhausted.
-- Follow any coding rules from shared rule files (.cursorrules, CLAUDE.md, etc.) shown in project context.
-
-## Example tool call
-When the user asks "Add a hello() function to utils.js", respond with a tool call like:
-<tool_call>
-{"name": "replace_in_file", "arguments": {"filePath": "src/utils.js", "oldText": "module.exports = {", "newText": "function hello() {\\n  return 'Hello!';\\n}\\n\\nmodule.exports = {\\n  hello,"}}
-</tool_call>`;
+## Example
+User: "Add hello() to utils.js" → tool call: replace_in_file(filePath, oldText, newText)`;
 
 /**
  * Detect if the model's text response looks like it's *describing* tool
@@ -697,16 +671,18 @@ export class Agent extends EventEmitter {
 
     // Build compact tool schema block so the model knows the available API
     const currentTools = this._getCurrentTools();
+    // Compact tool schema: short param list, first sentence only
     const toolLines = currentTools.map(t => {
       const fn = t.function;
       const params = fn.parameters?.properties || {};
-      const paramList = Object.entries(params)
-        .map(([k, v]) => `${k}: ${v.type || 'string'}`)
+      const required = fn.parameters?.required || [];
+      const paramList = Object.keys(params)
+        .map(k => k + (required.includes(k) ? '' : '?'))
         .join(', ');
       const desc = (fn.description || '').split('.')[0];
-      return `- **${fn.name}**(${paramList}): ${desc}.`;
+      return `- **${fn.name}**(${paramList}): ${desc}`;
     });
-    const toolSchemaBlock = `\n\n## Available tools\n${toolLines.join('\n')}`;
+    const toolSchemaBlock = `\n\n## Tools\n${toolLines.join('\n')}`;
 
     // Progressive discovery: describe inactive groups so the model knows
     // it can unlock more tools. Falls back to the old "extended tools" note.
@@ -716,13 +692,13 @@ export class Agent extends EventEmitter {
       const evictedDesc = this._lruCache.describeEvicted(registry.getToolMap());
       const parts = [];
       if (inactive) {
-        parts.push(`Call **discover_tools** to activate any of these groups when needed:\n${inactive}`);
+        parts.push(`Inactive groups: ${inactive.split('\n').map(l => l.split(':')[0].trim()).join(', ')}. Call discover_tools.`);
       }
       if (evictedDesc) {
-        parts.push(`The following tools were removed from context to save space (call them by name to re-activate):\n${evictedDesc}`);
+        parts.push(`Evicted: ${evictedDesc.split('\n').map(l => l.split('(')[0].trim()).join(', ')}`);
       }
       if (parts.length > 0) {
-        extendedNote = `\n\n## Additional tool groups\n${parts.join('\n\n')}`;
+        extendedNote = `\n\n## More tools\n${parts.join('\n')}`;
       }
     } else {
       const extended = registry.extendedToolNames();
@@ -1640,16 +1616,18 @@ export class Agent extends EventEmitter {
 
     // Rebuild tool schema block
     const allTools = registry.getTools(this.coreToolsOnly);
+    // Compact tool schema: short param list, first sentence only
     const toolLines = allTools.map(t => {
       const fn = t.function;
       const params = fn.parameters?.properties || {};
-      const paramList = Object.entries(params)
-        .map(([k, v]) => `${k}: ${v.type || 'string'}`)
+      const required = fn.parameters?.required || [];
+      const paramList = Object.keys(params)
+        .map(k => k + (required.includes(k) ? '' : '?'))
         .join(', ');
       const desc = (fn.description || '').split('.')[0];
-      return `- **${fn.name}**(${paramList}): ${desc}.`;
+      return `- **${fn.name}**(${paramList}): ${desc}`;
     });
-    const toolSchemaBlock = `\n\n## Available tools\n${toolLines.join('\n')}`;
+    const toolSchemaBlock = `\n\n## Tools\n${toolLines.join('\n')}`;
 
     // List extended tools
     const extended = registry.extendedToolNames();
