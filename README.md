@@ -191,6 +191,28 @@ To use Google's Gemini models:
 
 Default model: `gemini-2.5-pro`
 
+### Setting up Codex CLI
+
+To use Codex directly through the local Codex app-server:
+
+1. Install the `codex` CLI and make sure it is on your `PATH`
+2. Authenticate it:
+   ```bash
+   codex login
+   ```
+3. Run with the Codex provider:
+   ```bash
+   smol-agent -p codex "your prompt here"
+   ```
+
+Default model: `gpt-5.4`
+
+Notes:
+
+- This uses `codex app-server` under the hood, not the OpenAI-compatible HTTP API
+- Codex executes work directly inside your project directory, it is not routed through smol-agent's normal tool-calling loop
+- The provider starts Codex in the same working directory you pass with `-d, --directory`
+
 ### Custom OpenAI-Compatible Endpoints
 
 You can use any OpenAI-compatible API by passing the base URL as the provider:
@@ -309,7 +331,7 @@ smol-agent "add input validation to src/api.js"
 | Flag | Description |
 |------|-------------|
 | `-m, --model <name>` | Model to use (default depends on provider) |
-| `-p, --provider <name>` | LLM provider: `ollama`, `openai`, `anthropic`, `grok`, `groq`, `gemini` (default: `ollama`) |
+| `-p, --provider <name>` | LLM provider: `ollama`, `openai`, `anthropic`, `grok`, `groq`, `gemini`, `codex` (default: `ollama`) |
 | `-H, --host <url>` | Provider host/base URL (default: provider-specific) |
 | `--api-key <key>` | API key for cloud providers (or use env vars) |
 | `-d, --directory <path>` | Set working directory and jail boundary (default: cwd) |
@@ -562,10 +584,12 @@ Find and fix all linting errors in the project. Run the linter first to identify
 ## Architecture
 
 ```
-User prompt → Agent.run() → LLM Provider API → tool calls → execute tools → feed results back → repeat until text response
+User prompt → Agent.run() → LLM Provider API or Codex app-server → tool calls → execute tools → feed results back → repeat until text response
 ```
 
-The agent is an EventEmitter that drives a loop: send messages to the LLM provider, check for tool calls, execute them, push results back, and repeat (max 25 iterations). The pi-tui UI subscribes to events (`tool_call`, `tool_result`, `response`, `error`) to render progress.
+The agent is an EventEmitter that drives a loop: send messages to the configured provider, check for tool calls, execute them, push results back, and repeat (max 25 iterations). The pi-tui UI subscribes to events (`tool_call`, `tool_result`, `response`, `error`) to render progress.
+
+Most providers use smol-agent's normal tool-calling loop. The `codex` provider is different: it streams output from `codex app-server`, and Codex performs its own file and command execution directly in the working tree.
 
 ## Advanced Features
 

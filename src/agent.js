@@ -282,7 +282,7 @@ export class Agent extends EventEmitter {
     super();
 
     // Create or use the provided LLM provider
-    this.llmProvider = llmProvider || createProvider({ provider, model, host, apiKey, programmaticToolCalling });
+    this.llmProvider = llmProvider || createProvider({ provider, model, host, apiKey, cwd: resolvedJailDirectory, programmaticToolCalling });
     this.model = this.llmProvider.model;
     this.contextSize = contextSize; // AGENT.md line limit only
     this.maxTokens = maxTokens || DEFAULT_MAX_TOKENS;

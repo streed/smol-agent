@@ -17,6 +17,7 @@ import { createProvider, listProviders, getDefaultModel } from "../../src/provid
 import { OllamaProvider } from "../../src/providers/ollama.js";
 import { OpenAICompatibleProvider } from "../../src/providers/openai-compatible.js";
 import { AnthropicProvider } from "../../src/providers/anthropic.js";
+import { CodexCLIProvider } from "../../src/providers/codex-cli.js";
 
 // ── createProvider() ──────────────────────────────────────────────────────────
 
@@ -69,6 +70,12 @@ describe("createProvider()", () => {
   test("creates AnthropicProvider for 'anthropic' preset", () => {
     const p = createProvider({ provider: "anthropic", apiKey: "test-key" });
     expect(p).toBeInstanceOf(AnthropicProvider);
+  });
+
+  test("creates CodexCLIProvider for 'codex' preset", () => {
+    const p = createProvider({ provider: "codex" });
+    expect(p).toBeInstanceOf(CodexCLIProvider);
+    expect(p.name).toBe("codex");
   });
 
   test("treats http:// value as custom OpenAI-compatible URL (preserves casing)", () => {
@@ -125,6 +132,7 @@ describe("listProviders()", () => {
     expect(providers).toContain("openai");
     expect(providers).toContain("grok");
     expect(providers).toContain("anthropic");
+    expect(providers).toContain("codex");
   });
 });
 
@@ -141,6 +149,128 @@ describe("getDefaultModel()", () => {
 
   test("returns grok-4-latest for grok", () => {
     expect(getDefaultModel("grok")).toBe("grok-4-latest");
+  });
+
+  test("returns gpt-5.4 for codex", () => {
+    expect(getDefaultModel("codex")).toBe("gpt-5.4");
+  });
+});
+
+// ── CodexCLIProvider ────────────────────────────────────────────────────────
+
+describe("CodexCLIProvider", () => {
+  test("streams assistant deltas from codex app-server and returns the final message", async () => {
+    const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+    const stdoutListeners = new Map();
+    const stderrListeners = new Map();
+    const writes = [];
+
+    const child = {
+      stdout: {
+        on(event, handler) {
+          stdoutListeners.set(event, handler);
+        },
+      },
+      stderr: {
+        on(event, handler) {
+          stderrListeners.set(event, handler);
+        },
+      },
+      stdin: {
+        writable: true,
+        write(chunk) {
+          writes.push(JSON.parse(chunk.trim()));
+        },
+      },
+      on() {},
+      killed: false,
+      kill() {},
+    };
+
+    const provider = new CodexCLIProvider({
+      model: "gpt-5.4",
+      cwd: "/tmp/project",
+      spawnImpl: () => child,
+      createInterfaceImpl: () => ({
+        on(event, handler) {
+          stdoutListeners.set(event, handler);
+        },
+        close() {},
+      }),
+    });
+
+    const streamPromise = (async () => {
+      const events = [];
+      for await (const event of provider.chatStream(
+        [
+          { role: "system", content: "Be precise." },
+          { role: "user", content: "Inspect the repo and summarize the current state." },
+        ],
+        [],
+        null,
+      )) {
+        events.push(event);
+      }
+      return events;
+    })();
+
+    expect(writes).toHaveLength(1);
+    expect(writes[0].method).toBe("initialize");
+
+    stdoutListeners.get("line")(JSON.stringify({ id: writes[0].id, result: { ok: true } }));
+    await flush();
+    expect(writes).toHaveLength(3);
+    expect(writes[1].method).toBe("initialized");
+    expect(writes[2].method).toBe("thread/start");
+    stdoutListeners.get("line")(
+      JSON.stringify({
+        id: writes[2].id,
+        result: { thread: { id: "thread-123" } },
+      }),
+    );
+    await flush();
+
+    expect(writes).toHaveLength(4);
+    expect(writes[3].method).toBe("turn/start");
+    expect(writes[3].params.threadId).toBe("thread-123");
+
+    stdoutListeners.get("line")(
+      JSON.stringify({
+        id: writes[3].id,
+        result: { turn: { id: "turn-1" } },
+      }),
+    );
+    await flush();
+
+    stdoutListeners.get("line")(
+      JSON.stringify({
+        method: "item/agentMessage/delta",
+        params: { turnId: "turn-1", delta: "Inspected " },
+      }),
+    );
+    stdoutListeners.get("line")(
+      JSON.stringify({
+        method: "item/agentMessage/delta",
+        params: { turnId: "turn-1", delta: "the repository." },
+      }),
+    );
+    stdoutListeners.get("line")(
+      JSON.stringify({
+        method: "turn/completed",
+        params: { turn: { id: "turn-1", status: "completed" } },
+      }),
+    );
+
+    const events = await streamPromise;
+    expect(events).toEqual([
+      { type: "token", content: "Inspected " },
+      { type: "token", content: "the repository." },
+      {
+        type: "done",
+        toolCalls: [],
+        tokenUsage: { promptTokens: 0, completionTokens: 0 },
+      },
+    ]);
   });
 });
 

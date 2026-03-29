@@ -7,7 +7,7 @@
  *
  * CLI Options:
  *   -m, --model <name>       Model to use (default depends on provider)
- *   -p, --provider <name>    LLM provider: ollama, openai, anthropic, grok, groq, gemini
+ *   -p, --provider <name>    LLM provider: ollama, openai, anthropic, grok, groq, gemini, codex
  *   -H, --host <url>         Provider host/base URL
  *   --api-key <key>          API key for cloud providers
  *   -d, --directory <path>   Working directory and jail boundary
@@ -231,7 +231,7 @@ Usage:
 
 Options:
   -m, --model <name>        Model to use (default depends on provider)
-  -p, --provider <name>     LLM provider: ollama, openai, anthropic, grok (default: ollama)
+  -p, --provider <name>     LLM provider: ollama, openai, anthropic, grok, groq, gemini, codex (default: ollama)
   -H, --host <url>          Provider host/base URL (default: provider-specific)
       --api-key <key>       API key for cloud providers (or use env vars)
 
