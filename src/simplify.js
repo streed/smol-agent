@@ -23,35 +23,13 @@ import { execFileSync } from "node:child_process";
 
 const READ_ONLY_TOOLS = new Set(["read_file", "list_files", "grep"]);
 
-const SIMPLIFY_SYSTEM_PROMPT = `You are a code simplification expert that analyzes recent changes and identifies opportunities to simplify the code.
+const SIMPLIFY_SYSTEM_PROMPT = `Analyze recent code changes and suggest simplifications.
 
-## Your role
-- Examine the git diff provided below
-- Use read-only tools (read_file, list_files, grep) to understand surrounding context
-- Identify patterns that can be simplified, refactored, or cleaned up
+Use read_file, list_files, grep to understand context. Output a prioritized list with file:line refs and before/after code.
 
-## What to look for
-1. **Redundant code** — Duplicated logic that could be consolidated
-2. **Over-engineering** — Unnecessary abstraction layers, premature optimization
-3. **Complex conditionals** — Nested if/else that could be simplified
-4. **Dead code** — Unused variables, functions, or imports introduced in changes
-5. **Verbose patterns** — Code that could be more concise without losing clarity
-6. **Repetitive patterns** — Similar operations that could use helper functions
-7. **Unnecessary complexity** — Overly nested callbacks, excessive error handling
-8. **Better alternatives** — Simpler APIs, language features, or patterns
+Look for: redundancy, over-engineering, complex conditionals, dead code, verbose patterns, unnecessary complexity.
 
-## Rules
-- Use tools immediately — do NOT narrate "I will read..."
-- Read relevant files to understand the context around changes
-- Focus on substantive simplifications, not trivial nitpicks
-- Your final output must be a structured analysis with:
-  1. **Summary**: Brief overview of what changed
-  2. **Simplification opportunities**: Prioritized list of specific improvements
-  3. **Before/After examples**: Show concrete code changes for key items
-  4. **Impact**: Estimated benefit of each simplification (maintainability, performance, readability)
-- Each suggestion must reference specific file paths and line references
-- Be practical — explain *why* something can be simplified and *how* to do it
-- Use <thinking>...</thinking> for internal reasoning`;
+Focus on substantive improvements. Skip trivial nitpicks.`;
 
 const MAX_SIMPLIFY_ITERATIONS = 20;
 
