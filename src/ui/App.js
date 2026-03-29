@@ -578,6 +578,7 @@ export function startApp(agent, initialPrompt, options = {}) {
     { name: "session", description: "Manage sessions (save/load/delete/rename)" },
     { name: "architect", description: "Enable architect mode (plan before edit)" },
     { name: "review", description: "Review recent changes with actionable feedback" },
+    { name: "simplify", description: "Simplify current changes with AI assistance" },
     { name: "undo", description: "Rollback changes from the last agent run" },
     { name: "checkpoints", description: "List available rollback checkpoints" },
     { name: "approve", description: "Auto-approve a tool category (write/execute/network/all)" },
@@ -1258,6 +1259,40 @@ Reflect on these logs and determine if there's a skill worth creating. Process a
       return;
     }
 
+    // /simplify — simplify current uncommitted changes
+    if (trimmed === "/simplify") {
+      chatView.addLog(chalk.dim("    ⎿  Simplifying current changes..."));
+      chatView.addLog("");
+      busy = true;
+      statusText = "simplifying changes...";
+      tui.requestRender();
+      try {
+        const { simplifyPass } = await import("../simplify.js");
+        const projectContext = agent.messages[0]?.content?.split("# Project context\n\n")[1] || "";
+        const result = await simplifyPass(agent.client, agent.model, {
+          cwd: agent.jailDirectory || process.cwd(),
+          maxTokens: agent.maxTokens,
+          projectContext,
+          signal: agent.abortController?.signal,
+          onProgress: (event) => {
+            if (event.type === "simplify_tool") {
+              chatView.addLog(chalk.dim(`    ⎿  ${event.name}(${event.args?.filePath || event.args?.path || ""})`));
+              tui.requestRender();
+            }
+          },
+        });
+        chatView.addLog("");
+        chatView.addLog(result);
+      } catch (err) {
+        chatView.addLog(chalk.red(` ✗ Simplification failed: ${err.message}`));
+      } finally {
+        busy = false;
+        statusText = "";
+        tui.requestRender();
+      }
+      return;
+    }
+
     // /architect — enable architect mode for the next prompt
     if (trimmed === "/architect" || trimmed.startsWith("/architect ")) {
       const task = trimmed.slice("/architect".length).trim();
@@ -1342,7 +1377,7 @@ Reflect on these logs and determine if there's a skill worth creating. Process a
         !trimmed.startsWith("/inspect") && !trimmed.startsWith("/reload-skills") && !trimmed.startsWith("/exit") &&
         !trimmed.startsWith("/quit") && !trimmed.startsWith("/reflect") && !trimmed.startsWith("/document") && !trimmed.startsWith("/skills") &&
         !trimmed.startsWith("/session") && !trimmed.startsWith("/sessions") &&
-        !trimmed.startsWith("/architect") && !trimmed.startsWith("/review") && !trimmed.startsWith("/undo") && !trimmed.startsWith("/checkpoints") &&
+        !trimmed.startsWith("/architect") && !trimmed.startsWith("/review") && !trimmed.startsWith("/simplify") && !trimmed.startsWith("/undo") && !trimmed.startsWith("/checkpoints") &&
         !trimmed.startsWith("/approve") && !trimmed.startsWith("/agents") && !trimmed.startsWith("/agent")) {
       const skillName = trimmed.slice(1).split(/\s+/)[0];
       

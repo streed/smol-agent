@@ -290,7 +290,7 @@ register("replace_in_file", {
     }
 
     const original = fs.readFileSync(resolved, "utf-8");
-    let matchType = 'exact';
+    let _matchType = 'exact';
     let matchedOldText = oldText;
 
     // 1. Exact match
@@ -321,7 +321,7 @@ register("replace_in_file", {
 
         if (startIdx >= 0) {
           matchedOldText = origLines.slice(startIdx, startIdx + normLines.length).join('\n');
-          matchType = 'whitespace-normalized';
+          _matchType = 'whitespace-normalized';
         } else {
           return {
             error: "oldText not found in file. Make sure it matches exactly, including whitespace and indentation.",
@@ -332,7 +332,7 @@ register("replace_in_file", {
         const fuzzyResult = fuzzyMatch(original, oldText, FUZZY_THRESHOLD);
         if (fuzzyResult) {
           matchedOldText = fuzzyResult.match;
-          matchType = `fuzzy (${Math.round(fuzzyResult.similarity * 100)}% match at line ${fuzzyResult.startLine})`;
+          _matchType = `fuzzy (${Math.round(fuzzyResult.similarity * 100)}% match at line ${fuzzyResult.startLine})`;
         } else {
           // 4. No match — find closest hint using first line
           const firstLine = oldText.split('\n')[0].trim();
