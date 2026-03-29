@@ -6,7 +6,7 @@
  *   - Input field with autocomplete for commands and file paths
  *   - Real-time progress display during agent runs
  *   - Ask/user interaction flow for questions
- *   - Slash commands: /clear, /undo, /reflect, /architect, /review, /model, /checkpoint
+ *   - Slash commands: /clear, /undo, /reflect, /architect, /review, /simplify, /model, /checkpoint
  *
  * Key components:
  *   - App class: Main TUI component (extends TUI)
@@ -578,6 +578,7 @@ export function startApp(agent, initialPrompt, options = {}) {
     { name: "session", description: "Manage sessions (save/load/delete/rename)" },
     { name: "architect", description: "Enable architect mode (plan before edit)" },
     { name: "review", description: "Review recent changes with actionable feedback" },
+    { name: "simplify", description: "Suggest simplifications for current changes" },
     { name: "undo", description: "Rollback changes from the last agent run" },
     { name: "checkpoints", description: "List available rollback checkpoints" },
     { name: "approve", description: "Auto-approve a tool category (write/execute/network/all)" },
@@ -1258,6 +1259,42 @@ Reflect on these logs and determine if there's a skill worth creating. Process a
       return;
     }
 
+    // /simplify — suggest simplifications for current changes
+    if (trimmed === "/simplify" || trimmed.startsWith("/simplify ")) {
+      const scope = trimmed.slice("/simplify".length).trim();
+      chatView.addLog(chalk.dim("    ⎿  Analyzing changes for simplification opportunities..."));
+      chatView.addLog("");
+      busy = true;
+      statusText = "simplifying...";
+      tui.requestRender();
+      try {
+        const { simplifyPass } = await import("../simplify.js");
+        const projectContext = agent.messages[0]?.content?.split("# Project context\n\n")[1] || "";
+        const suggestions = await simplifyPass(agent.client, agent.model, {
+          cwd: agent.jailDirectory || process.cwd(),
+          maxTokens: agent.maxTokens,
+          projectContext,
+          signal: agent.abortController?.signal,
+          onProgress: (event) => {
+            if (event.type === "simplify_tool") {
+              chatView.addLog(chalk.dim(`    ⎿  reading ${event.args?.path || event.name}...`));
+              tui.requestRender();
+            }
+          },
+          scope,
+        });
+        chatView.addLog("");
+        chatView.addLog(suggestions);
+      } catch (err) {
+        chatView.addLog(chalk.red(` ✗ Simplify failed: ${err.message}`));
+      } finally {
+        busy = false;
+        statusText = "";
+        tui.requestRender();
+      }
+      return;
+    }
+
     // /architect — enable architect mode for the next prompt
     if (trimmed === "/architect" || trimmed.startsWith("/architect ")) {
       const task = trimmed.slice("/architect".length).trim();
@@ -1342,7 +1379,7 @@ Reflect on these logs and determine if there's a skill worth creating. Process a
         !trimmed.startsWith("/inspect") && !trimmed.startsWith("/reload-skills") && !trimmed.startsWith("/exit") &&
         !trimmed.startsWith("/quit") && !trimmed.startsWith("/reflect") && !trimmed.startsWith("/document") && !trimmed.startsWith("/skills") &&
         !trimmed.startsWith("/session") && !trimmed.startsWith("/sessions") &&
-        !trimmed.startsWith("/architect") && !trimmed.startsWith("/review") && !trimmed.startsWith("/undo") && !trimmed.startsWith("/checkpoints") &&
+        !trimmed.startsWith("/architect") && !trimmed.startsWith("/review") && !trimmed.startsWith("/simplify") && !trimmed.startsWith("/undo") && !trimmed.startsWith("/checkpoints") &&
         !trimmed.startsWith("/approve") && !trimmed.startsWith("/agents") && !trimmed.startsWith("/agent")) {
       const skillName = trimmed.slice(1).split(/\s+/)[0];
       
