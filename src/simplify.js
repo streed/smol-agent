@@ -19,7 +19,12 @@ import { logger } from "./logger.js";
 import { DEFAULT_MAX_TOKENS } from "./constants.js";
 import { execFileSync } from "node:child_process";
 
-// Tools allowed for simplification: read + write operations
+// Tools allowed for simplification:
+// - read_file: Read file contents to understand context before modifying
+// - list_files: Discover files in directories for context
+// - grep: Search codebase for patterns and usages
+// - replace_in_file: Make targeted edits to existing files
+// - write_file: Create new helper files if needed for extractions
 const SIMPLIFY_TOOLS = new Set([
   "read_file", "list_files", "grep", "replace_in_file", "write_file",
 ]);
