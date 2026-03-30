@@ -4,7 +4,7 @@ import {
 } from "../harness.js";
 import { config } from "../config.js";
 
-export const meta = { name: "dependency-analysis", timeout: config.timeouts.medium };
+export const meta = { name: "dependency-analysis", timeout: config.timeouts.medium, category: "search", evalType: "capability", difficulty: "medium" };
 
 const SEED_APP = `const express = require("express");
 const _ = require("lodash");

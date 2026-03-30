@@ -5,7 +5,7 @@ import {
 import { config } from "../config.js";
 import { buildActionLog, llmJudge } from "../llm-judge.js";
 
-export const meta = { name: "debug-broken-server", timeout: config.timeouts.complex };
+export const meta = { name: "debug-broken-server", timeout: config.timeouts.complex, category: "debugging", evalType: "capability", difficulty: "complex" };
 
 const SEED_SERVER = `const http = require("http");
 

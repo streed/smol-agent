@@ -13,7 +13,7 @@ import {
 } from "../harness.js";
 import { config } from "../config.js";
 
-export const meta = { name: "implement-event-emitter", timeout: config.timeouts.complex };
+export const meta = { name: "implement-event-emitter", timeout: config.timeouts.complex, category: "code-gen", evalType: "capability", difficulty: "complex" };
 
 const SEED_TEST = `import unittest
 from emitter import EventEmitter

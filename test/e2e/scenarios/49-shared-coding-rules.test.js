@@ -10,7 +10,7 @@ import {
 } from "../harness.js";
 import { config } from "../config.js";
 
-export const meta = { name: "shared-coding-rules", timeout: config.timeouts.medium };
+export const meta = { name: "shared-coding-rules", timeout: config.timeouts.medium, category: "context", evalType: "regression", difficulty: "medium" };
 
 export async function run() {
   const { agent, tmpDir } = createTestAgent();

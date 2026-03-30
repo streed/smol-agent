@@ -4,7 +4,7 @@ import {
 } from "../harness.js";
 import { config } from "../config.js";
 
-export const meta = { name: "nested-directory", timeout: config.timeouts.medium };
+export const meta = { name: "nested-directory", timeout: config.timeouts.medium, category: "file-ops", evalType: "regression", difficulty: "medium" };
 
 export async function run() {
   const { agent, tmpDir } = createTestAgent();

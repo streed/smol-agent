@@ -4,7 +4,7 @@ import {
 } from "../harness.js";
 import { config } from "../config.js";
 
-export const meta = { name: "api-endpoint", timeout: config.timeouts.complex };
+export const meta = { name: "api-endpoint", timeout: config.timeouts.complex, category: "code-gen", evalType: "capability", difficulty: "complex" };
 
 const SEED_SERVER = `const http = require("http");
 

@@ -13,7 +13,7 @@ import {
 } from "../harness.js";
 import { config } from "../config.js";
 
-export const meta = { name: "implement-linked-list", timeout: config.timeouts.complex };
+export const meta = { name: "implement-linked-list", timeout: config.timeouts.complex, category: "code-gen", evalType: "capability", difficulty: "complex" };
 
 const SEED_TEST = `import unittest
 from linked_list import LinkedList

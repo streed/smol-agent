@@ -153,18 +153,67 @@ export function check(name, passed, weight = 1, actual = undefined) {
 
 /**
  * Weighted scoring from an array of check objects.
- * Returns { name, score: 0-1, passed: score >= threshold, checks }.
+ * Returns { name, score: 0-1, passed: score >= threshold, checks, tokenUsage, transcript }.
+ *
+ * Optionally accepts an events object to extract token usage and transcript
+ * data for the runner to aggregate. This follows the "grade outputs not paths"
+ * principle — checks verify outcomes, while events provide observability.
  */
-export function scoreResult(name, checks, threshold = 0.5) {
+export function scoreResult(name, checks, thresholdOrOpts = 0.5) {
+  // Support both scoreResult(name, checks, 0.5) and scoreResult(name, checks, { threshold, events })
+  let threshold = 0.5;
+  let events = null;
+  if (typeof thresholdOrOpts === "object" && thresholdOrOpts !== null) {
+    threshold = thresholdOrOpts.threshold ?? 0.5;
+    events = thresholdOrOpts.events ?? null;
+  } else {
+    threshold = thresholdOrOpts;
+  }
+
   const totalWeight = checks.reduce((sum, c) => sum + (c.weight || 1), 0);
   const earned = checks.reduce((sum, c) => sum + (c.passed ? (c.weight || 1) : 0), 0);
   const score = totalWeight > 0 ? earned / totalWeight : 0;
-  return {
+
+  const result = {
     name,
     score: Math.round(score * 1000) / 1000,
     passed: score >= threshold,
     checks,
   };
+
+  // Extract token usage from events if available
+  if (events && events.token_usage && events.token_usage.length > 0) {
+    result.tokenUsage = summarizeTokenUsage(events.token_usage);
+  }
+
+  // Include transcript for post-mortem review if events available
+  if (events) {
+    result.transcript = {
+      timeline: events.timeline,
+      toolCalls: events.toolNames(),
+      totalToolCalls: events.tool_calls.length,
+      errors: events.errors.map(e => e.message || String(e)),
+    };
+  }
+
+  return result;
+}
+
+/**
+ * Summarize token usage entries into totals.
+ * Token usage events vary by provider but typically include
+ * prompt_tokens/completion_tokens or similar fields.
+ */
+function summarizeTokenUsage(usageEntries) {
+  let promptTokens = 0;
+  let completionTokens = 0;
+
+  for (const entry of usageEntries) {
+    promptTokens += entry.prompt_tokens || entry.promptTokens || entry.input_tokens || 0;
+    completionTokens += entry.completion_tokens || entry.completionTokens || entry.output_tokens || 0;
+  }
+
+  return { promptTokens, completionTokens, totalTokens: promptTokens + completionTokens };
 }
 
 // ── File helpers ─────────────────────────────────────────────────────

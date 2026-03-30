@@ -4,7 +4,7 @@ import {
 } from "../harness.js";
 import { config } from "../config.js";
 
-export const meta = { name: "env-config", timeout: config.timeouts.medium };
+export const meta = { name: "env-config", timeout: config.timeouts.medium, category: "code-transform", evalType: "regression", difficulty: "medium" };
 
 const SEED_CONFIG = `const dbHost = "localhost";
 const dbPort = 5432;

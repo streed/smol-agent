@@ -4,7 +4,7 @@ import {
 } from "../harness.js";
 import { config } from "../config.js";
 
-export const meta = { name: "code-documentation", timeout: config.timeouts.medium };
+export const meta = { name: "code-documentation", timeout: config.timeouts.medium, category: "code-gen", evalType: "regression", difficulty: "medium" };
 
 const SEED_CODE = `function calculateDiscount(price, customerType, quantity) {
   let discount = 0;

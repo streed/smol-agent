@@ -4,7 +4,7 @@ import {
 } from "../harness.js";
 import { config } from "../config.js";
 
-export const meta = { name: "async-refactor", timeout: config.timeouts.complex };
+export const meta = { name: "async-refactor", timeout: config.timeouts.complex, category: "code-transform", evalType: "capability", difficulty: "complex" };
 
 const SEED_CODE = `const fs = require("fs");
 

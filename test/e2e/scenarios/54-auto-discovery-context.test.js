@@ -14,7 +14,7 @@ import {
 } from "../harness.js";
 import { config } from "../config.js";
 
-export const meta = { name: "auto-discovery-context", timeout: config.timeouts.medium };
+export const meta = { name: "auto-discovery-context", timeout: config.timeouts.medium, category: "context", evalType: "capability", difficulty: "medium" };
 
 export async function run() {
   // coreToolsOnly: false enables progressive discovery with auto-detection

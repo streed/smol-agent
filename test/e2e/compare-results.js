@@ -157,6 +157,84 @@ if (passedByAll.length > 0) {
   console.log("");
 }
 
+// Eval saturation detection
+// Per Anthropic's eval guide: capability evals with >80% pass rate across
+// all models have lost improvement signal and should become regression evals.
+const saturationThreshold = 0.8;
+const saturatedScenarios = Array.from(allScenarios).filter((name) => {
+  const scores = results.map((r) => {
+    const s = r.results.find((s) => s.name === name);
+    return s ? s.score : 0;
+  });
+  const avgScore = scores.reduce((a, b) => a + b, 0) / scores.length;
+  return avgScore >= saturationThreshold;
+});
+
+if (saturatedScenarios.length > 0) {
+  console.log("┌────────────────────────────────────────────────────────────────┐");
+  console.log("│ ⚠ Eval Saturation Warning:                                   │");
+  console.log("│ These evals have ≥80% avg score across all models.            │");
+  console.log("│ They've lost improvement signal — consider promoting to       │");
+  console.log("│ regression suite or replacing with harder variants.            │");
+  console.log("└────────────────────────────────────────────────────────────────┘\n");
+
+  for (const name of saturatedScenarios) {
+    const scores = results.map((r) => {
+      const s = r.results.find((s) => s.name === name);
+      return s ? s.score : 0;
+    });
+    const avg = (scores.reduce((a, b) => a + b, 0) / scores.length * 100).toFixed(0);
+    console.log(`  ⚠ ${name} (avg: ${avg}%)`);
+  }
+  console.log("");
+}
+
+// Reliability metrics (pass@k / pass^k)
+const hasReliability = results.some((r) =>
+  r.results.some((s) => s.reliability)
+);
+
+if (hasReliability) {
+  console.log("┌────────────────────────────────────────────────────────────────┐");
+  console.log("│ Reliability Metrics (pass@k / pass^k):                        │");
+  console.log("│ pass@k = P(≥1 success in k trials)                            │");
+  console.log("│ pass^k = P(all k trials succeed)                              │");
+  console.log("└────────────────────────────────────────────────────────────────┘\n");
+
+  console.log("  ┌─────────────────────┬──────────┬──────────┬──────────┐");
+  console.log("  │ Model               │ Avg p@k  │ Avg p^k  │ Avg Rate │");
+  console.log("  ├─────────────────────┼──────────┼──────────┼──────────┤");
+
+  for (const r of results) {
+    const withReliability = r.results.filter((s) => s.reliability);
+    if (withReliability.length === 0) continue;
+    const avgPassAtK = withReliability.reduce((s, sc) => s + sc.reliability.passAtK, 0) / withReliability.length;
+    const avgPassHatK = withReliability.reduce((s, sc) => s + sc.reliability.passHatK, 0) / withReliability.length;
+    const avgRate = withReliability.reduce((s, sc) => s + sc.reliability.passRate, 0) / withReliability.length;
+    const model = r.model.padEnd(19);
+    console.log(`  │ ${model} │  ${avgPassAtK.toFixed(3)}   │  ${avgPassHatK.toFixed(3)}   │  ${avgRate.toFixed(3)}   │`);
+  }
+
+  console.log("  └─────────────────────┴──────────┴──────────┴──────────┘\n");
+}
+
+// Token usage comparison
+const hasTokenUsage = results.some((r) => r.aggregate.token_usage?.totalTokens > 0);
+
+if (hasTokenUsage) {
+  console.log("┌────────────────────────────────────────────────────────────────┐");
+  console.log("│ Token Usage by Model:                                         │");
+  console.log("└────────────────────────────────────────────────────────────────┘\n");
+
+  for (const r of results) {
+    const t = r.aggregate.token_usage;
+    if (t && t.totalTokens > 0) {
+      console.log(`  ${r.model}: ${t.totalTokens.toLocaleString()} tokens (${t.promptTokens.toLocaleString()} prompt, ${t.completionTokens.toLocaleString()} completion)`);
+    }
+  }
+  console.log("");
+}
+
 // Summary stats
 console.log("┌────────────────────────────────────────────────────────────────┐");
 console.log("│ Summary Statistics:                                           │");
@@ -170,4 +248,5 @@ console.log(`  Average score across all models: ${avgScore.toFixed(3)}`);
 console.log(`  Total test runs: ${totalTests}`);
 console.log(`  Total passed: ${totalPassed} (${((totalPassed / totalTests) * 100).toFixed(1)}%)`);
 console.log(`  Models compared: ${results.length}`);
-console.log(`  Scenarios tested: ${allScenarios.size}\n`);
+console.log(`  Scenarios tested: ${allScenarios.size}`);
+console.log(`  Saturated evals (≥80%): ${saturatedScenarios.length}/${allScenarios.size}\n`);

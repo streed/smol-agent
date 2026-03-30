@@ -14,7 +14,7 @@ import {
 import { config } from "../config.js";
 import { buildActionLog, llmJudge } from "../llm-judge.js";
 
-export const meta = { name: "multi-file-server", timeout: config.timeouts.complex };
+export const meta = { name: "multi-file-server", timeout: config.timeouts.complex, category: "code-gen", evalType: "capability", difficulty: "complex" };
 
 const SEED_SERVER = `const http = require("http");
 const { handleUsers } = require("./routes/user-routes");

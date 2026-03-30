@@ -4,7 +4,7 @@ import {
 } from "../harness.js";
 import { config } from "../config.js";
 
-export const meta = { name: "self-correction", timeout: config.timeouts.complex };
+export const meta = { name: "self-correction", timeout: config.timeouts.complex, category: "error-handling", evalType: "capability", difficulty: "complex" };
 
 const SEED_APP = `function greet(name) {
   return "Hello, " + name;

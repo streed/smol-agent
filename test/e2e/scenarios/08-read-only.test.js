@@ -4,7 +4,7 @@ import {
 } from "../harness.js";
 import { config } from "../config.js";
 
-export const meta = { name: "read-only", timeout: config.timeouts.simple };
+export const meta = { name: "read-only", timeout: config.timeouts.simple, category: "agent-behavior", evalType: "regression", difficulty: "simple" };
 
 const WRITE_TOOLS = ["write_file", "replace_in_file", "run_command"];
 

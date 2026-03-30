@@ -11,7 +11,7 @@ import {
 } from "../harness.js";
 import { config } from "../config.js";
 
-export const meta = { name: "progressive-discovery", timeout: config.timeouts.complex };
+export const meta = { name: "progressive-discovery", timeout: config.timeouts.complex, category: "agent-behavior", evalType: "capability", difficulty: "complex" };
 
 export async function run() {
   // coreToolsOnly: false enables progressive discovery

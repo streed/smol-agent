@@ -4,7 +4,7 @@ import {
 } from "../harness.js";
 import { config } from "../config.js";
 
-export const meta = { name: "file-edit", timeout: config.timeouts.medium };
+export const meta = { name: "file-edit", timeout: config.timeouts.medium, category: "file-ops", evalType: "regression", difficulty: "medium" };
 
 const SEED_CONFIG = JSON.stringify(
   { host: "localhost", port: 3000, debug: true },

@@ -4,7 +4,7 @@ import {
 } from "../harness.js";
 import { config } from "../config.js";
 
-export const meta = { name: "import-path-update", timeout: config.timeouts.medium };
+export const meta = { name: "import-path-update", timeout: config.timeouts.medium, category: "code-transform", evalType: "regression", difficulty: "medium" };
 
 const SEED_INDEX = `const { add, subtract } = require("./utils");
 const { formatNumber } = require("./utils");

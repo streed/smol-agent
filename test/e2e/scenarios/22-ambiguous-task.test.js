@@ -4,7 +4,7 @@ import {
 } from "../harness.js";
 import { config } from "../config.js";
 
-export const meta = { name: "ambiguous-task", timeout: config.timeouts.complex };
+export const meta = { name: "ambiguous-task", timeout: config.timeouts.complex, category: "agent-behavior", evalType: "capability", difficulty: "complex" };
 
 const SEED_SERVER = `const http = require("http");
 

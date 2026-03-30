@@ -4,7 +4,7 @@ import {
 } from "../harness.js";
 import { config } from "../config.js";
 
-export const meta = { name: "class-conversion", timeout: config.timeouts.complex };
+export const meta = { name: "class-conversion", timeout: config.timeouts.complex, category: "code-transform", evalType: "capability", difficulty: "complex" };
 
 const SEED_CODE = `function Counter(initialValue = 0) {
   this.value = initialValue;

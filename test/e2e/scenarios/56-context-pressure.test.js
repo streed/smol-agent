@@ -12,7 +12,7 @@ import {
 } from "../harness.js";
 import { config } from "../config.js";
 
-export const meta = { name: "context-pressure", timeout: config.timeouts.complex };
+export const meta = { name: "context-pressure", timeout: config.timeouts.complex, category: "context", evalType: "capability", difficulty: "complex" };
 
 export async function run() {
   const { agent, tmpDir } = createTestAgent({ contextSize: 16384 });

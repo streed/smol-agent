@@ -13,7 +13,7 @@ import {
 } from "../harness.js";
 import { config } from "../config.js";
 
-export const meta = { name: "debug-runtime-error", timeout: config.timeouts.complex };
+export const meta = { name: "debug-runtime-error", timeout: config.timeouts.complex, category: "debugging", evalType: "capability", difficulty: "complex" };
 
 const SEED_PROCESSOR = `import json
 import sys

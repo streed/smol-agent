@@ -4,7 +4,7 @@ import {
 } from "../harness.js";
 import { config } from "../config.js";
 
-export const meta = { name: "extract-function", timeout: config.timeouts.complex };
+export const meta = { name: "extract-function", timeout: config.timeouts.complex, category: "code-transform", evalType: "capability", difficulty: "complex" };
 
 const SEED_CODE = `function processUser(user) {
   // Validate user

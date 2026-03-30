@@ -5,7 +5,7 @@ import {
 import { config } from "../config.js";
 import { buildActionLog, llmJudge } from "../llm-judge.js";
 
-export const meta = { name: "build-rest-api", timeout: config.timeouts.complex };
+export const meta = { name: "build-rest-api", timeout: config.timeouts.complex, category: "code-gen", evalType: "capability", difficulty: "complex" };
 
 const TASK_PROMPT = `Create a Node.js HTTP server using only built-in modules, listening on port 4200, with these endpoints:
 - GET / → responds with plain text "Welcome to the API"

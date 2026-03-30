@@ -4,7 +4,7 @@ import {
 } from "../harness.js";
 import { config } from "../config.js";
 
-export const meta = { name: "whitespace-replace", timeout: config.timeouts.medium };
+export const meta = { name: "whitespace-replace", timeout: config.timeouts.medium, category: "file-ops", evalType: "regression", difficulty: "medium" };
 
 // Seed with inconsistent whitespace (tabs + trailing spaces) to exercise
 // the 3-level matching strategy in replace_in_file.

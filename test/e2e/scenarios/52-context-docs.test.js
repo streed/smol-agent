@@ -15,7 +15,7 @@ import {
 } from "../harness.js";
 import { config } from "../config.js";
 
-export const meta = { name: "context-docs", timeout: config.timeouts.complex };
+export const meta = { name: "context-docs", timeout: config.timeouts.complex, category: "context", evalType: "capability", difficulty: "complex" };
 
 export async function run() {
   const { agent, tmpDir } = createTestAgent({ coreToolsOnly: false });

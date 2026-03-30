@@ -4,7 +4,7 @@ import {
 } from "../harness.js";
 import { config } from "../config.js";
 
-export const meta = { name: "refactor-rename", timeout: config.timeouts.complex };
+export const meta = { name: "refactor-rename", timeout: config.timeouts.complex, category: "code-transform", evalType: "capability", difficulty: "complex" };
 
 const SEED_UTILS = `function calculateTotal(items) {
   return items.reduce((sum, item) => sum + item.price, 0);

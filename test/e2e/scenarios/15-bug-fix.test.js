@@ -4,7 +4,7 @@ import {
 } from "../harness.js";
 import { config } from "../config.js";
 
-export const meta = { name: "bug-fix", timeout: config.timeouts.complex };
+export const meta = { name: "bug-fix", timeout: config.timeouts.complex, category: "debugging", evalType: "capability", difficulty: "complex" };
 
 // A function with an off-by-one bug: the loop condition should be <=, not <
 const SEED_CODE = `function fibonacci(n) {

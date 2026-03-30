@@ -4,7 +4,7 @@ import {
 } from "../harness.js";
 import { config } from "../config.js";
 
-export const meta = { name: "multi-file-create", timeout: config.timeouts.complex };
+export const meta = { name: "multi-file-create", timeout: config.timeouts.complex, category: "file-ops", evalType: "regression", difficulty: "complex" };
 
 export async function run() {
   const { agent, tmpDir } = createTestAgent();

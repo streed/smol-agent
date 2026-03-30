@@ -4,7 +4,7 @@ import {
 } from "../harness.js";
 import { config } from "../config.js";
 
-export const meta = { name: "cancellation", timeout: config.timeouts.simple };
+export const meta = { name: "cancellation", timeout: config.timeouts.simple, category: "agent-behavior", evalType: "regression", difficulty: "simple" };
 
 export async function run() {
   const { agent, tmpDir } = createTestAgent();

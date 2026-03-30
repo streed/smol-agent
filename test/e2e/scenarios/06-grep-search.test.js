@@ -4,7 +4,7 @@ import {
 } from "../harness.js";
 import { config } from "../config.js";
 
-export const meta = { name: "grep-search", timeout: config.timeouts.simple };
+export const meta = { name: "grep-search", timeout: config.timeouts.simple, category: "search", evalType: "regression", difficulty: "simple" };
 
 export async function run() {
   const { agent, tmpDir } = createTestAgent();

@@ -4,7 +4,7 @@ import {
 } from "../harness.js";
 import { config } from "../config.js";
 
-export const meta = { name: "large-output", timeout: config.timeouts.medium };
+export const meta = { name: "large-output", timeout: config.timeouts.medium, category: "agent-behavior", evalType: "regression", difficulty: "medium" };
 
 export async function run() {
   const { agent, tmpDir } = createTestAgent();

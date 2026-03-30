@@ -13,7 +13,7 @@ import {
 } from "../harness.js";
 import { config } from "../config.js";
 
-export const meta = { name: "multi-file-import-refactor", timeout: config.timeouts.complex };
+export const meta = { name: "multi-file-import-refactor", timeout: config.timeouts.complex, category: "code-transform", evalType: "capability", difficulty: "complex" };
 
 const SEED_ROUTES = `function validateEmail(email) {
   return /^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(email);

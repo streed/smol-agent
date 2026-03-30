@@ -14,7 +14,7 @@ import {
 } from "../harness.js";
 import { config } from "../config.js";
 
-export const meta = { name: "cpp-fix-memory-bug", timeout: config.timeouts.complex };
+export const meta = { name: "cpp-fix-memory-bug", timeout: config.timeouts.complex, category: "debugging", evalType: "capability", difficulty: "complex" };
 
 const SEED_CODE = `#include <iostream>
 #include <cstring>
