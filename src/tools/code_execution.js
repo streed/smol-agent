@@ -149,7 +149,7 @@ register("code_execution", {
     },
   },
   core: true,
-  async execute({ code }, { cwd: _cwd, eventEmitter } = {}) {
+  async execute({ code }, { cwd: _cwd, eventEmitter, allowedTools } = {}) {
     if (!code || typeof code !== "string") {
       return { error: "code must be a non-empty string" };
     }
@@ -158,8 +158,11 @@ register("code_execution", {
       return { error: "Code too long (max 50,000 characters)" };
     }
 
-    // Get all available tools (including non-core) to expose in the sandbox
-    const allTools = getTools(false);
+    // Get tools to expose in the sandbox — optionally restricted
+    let allTools = getTools(false);
+    if (allowedTools) {
+      allTools = allTools.filter(t => allowedTools.has(t.function.name));
+    }
 
     const toolCallLog = [];
     const { context, getOutput } = buildSandbox(allTools, {

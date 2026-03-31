@@ -155,6 +155,8 @@ let listSessionsFlag = false;   // --list-sessions
 let sessionName = undefined;    // --session-name <name> for new sessions
 let continueSession = false;    // --continue to resume the most recent session
 let watchInboxFlag = false;     // --watch-inbox to run inbox watcher
+let reviewFlag = false;         // --review to run review mode
+let reviewBranch = undefined;   // branch to review (optional arg after --review)
 let progressFd = undefined;    // --progress-fd <n> to write JSONL progress events
 let programmaticTools = undefined; // --programmatic-tools / --no-programmatic-tools
 let showCodeExec = false;       // --show-code-exec to show internal code_execution tool calls
@@ -194,6 +196,12 @@ for (let i = 0; i < args.length; i++) {
     listSessionsFlag = true;
   } else if (a === "--watch-inbox") {
     watchInboxFlag = true;
+  } else if (a === "--review") {
+    reviewFlag = true;
+    // Next arg is the branch name if it doesn't start with -
+    if (args[i + 1] && !args[i + 1].startsWith("-")) {
+      reviewBranch = args[++i];
+    }
   } else if (a === "--progress-fd" && args[i + 1]) {
     progressFd = parseInt(args[++i], 10);
     if (!Number.isFinite(progressFd) || progressFd < 0) {
@@ -242,6 +250,7 @@ Options:
       --programmatic-tools  Enable programmatic tool calling (Anthropic: server-side, others: client-side)
       --no-programmatic-tools  Disable programmatic tool calling
       --acp                 Run as ACP (Agent Client Protocol) server over stdio
+      --review [branch]     Review changes on a branch (default: current branch) and exit
       --show-code-exec      Show internal tool calls made by code_execution tool
       --watch-inbox         Watch inbox for cross-agent letters and process them
       --progress-fd <n>    Write JSONL progress events to file descriptor n
@@ -356,6 +365,32 @@ if (acpMode) {
     watcher.stop();
     process.exit(0);
   });
+} else if (reviewFlag) {
+  // ── Review mode (headless) ────────────────────────────────────────
+  const { reviewPass } = await import("./review.js");
+  const { createProvider } = await import("./providers/index.js");
+
+  const llm = createProvider({ provider, host, model, apiKey });
+  const branchLabel = reviewBranch || "current branch";
+  console.log(`Reviewing ${branchLabel}...\n`);
+
+  try {
+    const review = await reviewPass(llm, {
+      cwd: jailDirectory,
+      branch: reviewBranch || "",
+      onProgress: (event) => {
+        if (event.type === "review_tool") {
+          const label = event.args?.path || event.args?.pattern || event.name;
+          process.stderr.write(`  reading ${label}...\n`);
+        }
+      },
+    });
+    console.log(review);
+  } catch (err) {
+    console.error(`Review failed: ${err.message}`);
+    process.exit(1);
+  }
+  process.exit(0);
 } else if (progressFd !== undefined && promptText) {
   // ── Headless mode (spawned child agent) ─────────────────────────────
   // When --progress-fd is set with a prompt, run the agent without TUI.

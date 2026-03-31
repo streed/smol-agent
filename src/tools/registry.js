@@ -348,16 +348,16 @@ export async function execute(name, args, _options = {}) {
 
   // Always use global jail directory, ignore options.cwd for security
   const cwd = _jailDirectory || process.cwd();
-  const { eventEmitter } = _options;
+  const { eventEmitter, allowedTools } = _options;
   // Log argument details for key tools to aid debugging
   const argSummary = name === "run_command" ? (args?.command || "").slice(0, 200)
-    : name === "git" ? (args?.args || []).join(" ")
+    : name === "git" ? (Array.isArray(args?.args) ? args.args.join(" ") : String(args?.args || ""))
     : name === "write_file" || name === "replace_in_file" ? args?.filePath || ""
     : Object.keys(args || {}).join(", ");
   logger.info(`Executing tool: ${name}(${argSummary.slice(0, 150)})`);
 
   try {
-    const result = await tool.execute(args, { cwd, eventEmitter });
+    const result = await tool.execute(args, { cwd, eventEmitter, allowedTools });
     if (result?.error) {
       logger.warn(`Tool ${name} returned error: ${String(result.error).slice(0, 200)}`);
     } else {

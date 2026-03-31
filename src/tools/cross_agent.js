@@ -155,8 +155,8 @@ register("send_letter", {
         to: toPath,
         title: args.title,
         body: args.body,
-        acceptanceCriteria: args.acceptance_criteria || [],
-        verificationSteps: args.verification_steps || [],
+        acceptanceCriteria: Array.isArray(args.acceptance_criteria) ? args.acceptance_criteria : [],
+        verificationSteps: Array.isArray(args.verification_steps) ? args.verification_steps : [],
         context: args.context || "",
         priority: args.priority || "medium",
       });
@@ -424,15 +424,16 @@ register("reply_to_letter", {
 
       // Enforce verification: if original letter had verification steps,
       // the reply must include verification results
+      const steps = Array.isArray(originalLetter.verificationSteps) ? originalLetter.verificationSteps : [];
       if (
-        originalLetter.verificationSteps?.length > 0 &&
+        steps.length > 0 &&
         !args.verification_results
       ) {
         return {
           error:
             "The original letter included verification steps. You MUST provide " +
             "verification_results showing the output of running those steps. " +
-            `Steps required: ${originalLetter.verificationSteps.map((s) => `"${s}"`).join(", ")}`,
+            `Steps required: ${steps.map((s) => `"${s}"`).join(", ")}`,
         };
       }
 
