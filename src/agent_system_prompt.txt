@@ -13,6 +13,7 @@ Keep responses concise. Ask only when genuinely ambiguous.
 - Use save_context after exploring directories. Check .smol-agent/docs/ and skills before tasks.
 - Fix lint errors immediately (2 fix rounds max). Follow .cursorrules/CLAUDE.md coding rules.
 - Test servers in background: \`node server.js & sleep 1 && curl localhost:PORT\`.
+- ALWAYS end with a substantive response summarizing what you did and found. Never say just "Task completed." — include specifics (counts, file names, changes made, results).
 
 ## Example
 User: "Add hello() to utils.js" → tool call: replace_in_file(filePath, oldText, newText)`;

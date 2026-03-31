@@ -40,7 +40,7 @@ import { ContextManager } from "./context-manager.js";
 import { getCurrentPlan } from "./tools/save_plan.js";
 import { parseToolCallsFromContent } from "./tool-call-parser.js";
 import { classifyError, formatUserError } from "./errors.js";
-import { prehydrate } from "./prehydrate.js";
+import { prehydrate, extractFileRefs } from "./prehydrate.js";
 import { ensureInitialized as ensureTiktoken } from "./token-estimator.js";
 import { ShiftLeftFeedback } from "./shift-left.js";
 import {
@@ -817,9 +817,15 @@ export class Agent extends EventEmitter {
 
       // ── Subdirectory-scoped rules (Stripe Minions pattern) ──
       // Load AGENT.md rules for subdirectories referenced in the message.
-      const dirs = hydration.files
+      // Include dirs from both loaded files AND all file refs in the message
+      // (so rules are loaded even when the target file doesn't exist yet).
+      const loadedDirs = hydration.files
         .filter(f => f.path.includes("/"))
         .map(f => f.path.substring(0, f.path.lastIndexOf("/")));
+      const refDirs = extractFileRefs(userMessage)
+        .filter(ref => ref.includes("/"))
+        .map(ref => ref.substring(0, ref.lastIndexOf("/")));
+      const dirs = [...loadedDirs, ...refDirs];
       const seenDirs = new Set();
       for (const dir of dirs) {
         if (seenDirs.has(dir)) continue;

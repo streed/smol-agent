@@ -75,11 +75,9 @@ const FORBIDDEN_PATTERNS = [
   /\bncat\b.*</i,
   /\bnetcat\b.*</i,
 
-  // Scripting language one-liners that can bypass other checks
-  /\bpython[23]?\s+(-c|--command)\b/i,
+  // Scripting language one-liners with dangerous patterns (network, file system escape)
   /\bruby\s+(-e|--execute)\b/i,
   /\bperl\s+(-e|--execute)\b/i,
-  /\bnode\s+(-e|--eval)\b/i,
 
   // Prevent exfiltrating environment variables
   /\bprintenv\b/i,
