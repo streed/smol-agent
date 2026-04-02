@@ -1,0 +1,47 @@
+{
+  "compilerOptions": {
+    // Target modern Node.js
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    
+    // Module resolution for ESM
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    
+    // Output to dist/ directory
+    "outDir": "./dist",
+    "rootDir": "./src",
+    
+    // Generate declaration files for IDE support
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    
+    // Interop settings
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "resolveJsonModule": true,
+    
+    // Strict type checking (start lenient, increase gradually)
+    "strict": true,
+    "noImplicitAny": false,
+    "strictNullChecks": false,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    
+    // Other options
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    
+    // Node.js types
+    "types": ["node", "jest"]
+  },
+  "include": [
+    "src/**/*"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "test"
+  ]
+}

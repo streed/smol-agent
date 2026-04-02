@@ -8,6 +8,16 @@
  *   - Ask/user interaction flow for questions
  *   - Slash commands: /clear, /undo, /reflect, /architect, /review, /simplify, /model, /checkpoint
  *
+ * Startup flow:
+ *   - LoadingAnimation displays rain effect while agent._init() gathers context
+ *   - Transitions immediately to ChatView when context is ready (no artificial delay)
+ *   - Shows model name and working directory in status bar
+ *
+ * Ctrl+C handling (three states):
+ *   - Idle: First press shows "(press Ctrl+C again to quit)", second within 2s exits
+ *   - Busy: First press cancels operation and sets idleCtrlC flag, second press exits
+ *   - Approval: Press denies the approval and returns to input (no exit behavior)
+ *
  * Key components:
  *   - App class: Main TUI component (extends TUI)
  *   - Message rendering: Markdown with code highlighting, diff visualization
@@ -25,6 +35,7 @@
  *                  test/e2e/scenarios/06-grep-search.test.js, test/e2e/scenarios/34-implement-linked-list.test.js,
  *                  test/e2e/scenarios/58-tool-error-recovery.test.js, test/unit/context-docs.test.js,
  *                  test/unit/registry.test.js, test/unit/repo-map.test.js, test/unit/settings.test.js
+ * @file-doc
  */
 import {
   ProcessTerminal,
@@ -64,6 +75,7 @@ import {
   findSession,
   deleteSession,
 } from "../sessions.js";
+import * as registry from "../tools/registry.js";
 import {
   listAgents as registryListAgents,
   findAgent as registryFindAgent,
@@ -323,20 +335,161 @@ class StatusArea {
     }
 
     if (state.askState) {
-      lines.push(truncateToWidth(
-        chalk.magenta.bold(" ?  ") + chalk.bold(state.askState.question),
-        width,
-      ));
+      // Question prompt with bordered box similar to approval UI
+      lines.push("");
+      
+      // Top border
+      const topLine = chalk.magenta("┌") + chalk.magenta("─".repeat(width - 2)) + chalk.magenta("┐");
+      lines.push(truncateToWidth(topLine, width));
+      
+      // Header with question badge
+      const headerLine = chalk.magenta("│") + " " + 
+        chalk.black.bgMagenta(" QUESTION ") + " " +
+        chalk.magenta("─".repeat(Math.max(0, width - 14))) + chalk.magenta("│");
+      lines.push(truncateToWidth(headerLine, width));
+      
+      // Separator
+      const sepLine = chalk.magenta("├") + chalk.magenta("─".repeat(width - 2)) + chalk.magenta("┤");
+      lines.push(truncateToWidth(sepLine, width));
+      
+      // Question text (simple wrap by width)
+      const maxWidth = width - 4;
+      const question = state.askState.question;
+      const questionLines = [];
+      let remaining = question;
+      while (remaining.length > 0 && questionLines.length < 5) {
+        if (remaining.length <= maxWidth) {
+          questionLines.push(remaining);
+          break;
+        }
+        // Find last space before maxWidth
+        let breakPoint = maxWidth;
+        const lastSpace = remaining.lastIndexOf(" ", maxWidth);
+        if (lastSpace > 0) breakPoint = lastSpace;
+        questionLines.push(remaining.slice(0, breakPoint).trim());
+        remaining = remaining.slice(breakPoint).trim();
+      }
+      
+      for (const qLine of questionLines) {
+        const questionLine = chalk.magenta("│") + " " + 
+          chalk.bold(qLine) + 
+          " ".repeat(Math.max(0, width - qLine.length - 3)) + chalk.magenta("│");
+        lines.push(truncateToWidth(questionLine, width));
+      }
+      
+      // Separator before input hint
+      const sep2Line = chalk.magenta("├") + chalk.magenta("─".repeat(width - 2)) + chalk.magenta("┤");
+      lines.push(truncateToWidth(sep2Line, width));
+      
+      // Input hint
+      const hintLine = chalk.magenta("│") + " " + 
+        chalk.dim("Type your answer below and press ") + 
+        chalk.green.bold("Enter") + 
+        " ".repeat(Math.max(0, width - 38)) + chalk.magenta("│");
+      lines.push(truncateToWidth(hintLine, width));
+      
+      // Bottom border
+      const bottomLine = chalk.magenta("└") + chalk.magenta("─".repeat(width - 2)) + chalk.magenta("┘");
+      lines.push(truncateToWidth(bottomLine, width));
     }
 
     if (state.approvalState) {
       const { name, args } = state.approvalState;
-      const summary = summarizeArgs(args);
-      const shortSummary = summary.length > 60 ? summary.slice(0, 57) + "..." : summary;
-      const approvalLine = chalk.yellow.bold(" ⚠  ") +
-        chalk.bold(`Approve ${name}(${shortSummary})`) +
-        chalk.dim(" [y/n/a]");
-      lines.push(truncateToWidth(approvalLine, width));
+      const info = registry.getApprovalInfo(name, args);
+      
+      // Add visual separation
+      lines.push("");
+      
+      // Risk indicator styling
+      const riskStyles = {
+        low: { 
+          border: chalk.green, 
+          label: chalk.black.bgGreen,
+        },
+        medium: { 
+          border: chalk.yellow, 
+          label: chalk.black.bgYellow,
+        },
+        critical: { 
+          border: chalk.red, 
+          label: chalk.black.bgRed,
+        },
+      };
+      const style = riskStyles[info.risk] || { border: chalk.white, label: chalk.black.bgWhite };
+      
+      // Category badge
+      const catColors = {
+        read: chalk.blue,
+        write: chalk.yellow,
+        execute: chalk.magenta,
+        network: chalk.cyan,
+        safe: chalk.green,
+        other: chalk.gray,
+      };
+      const catColor = catColors[info.category] || chalk.gray;
+      
+      // Risk level labels
+      const riskLabels = { low: "SAFE", medium: "MODIFY", critical: "DESTRUCTIVE" };
+      
+      // Top border with badge
+      const topLine = style.border("┌") + style.border("─".repeat(width - 2)) + style.border("┐");
+      lines.push(truncateToWidth(topLine, width));
+      
+      // Header line with risk indicator and category
+      // Calculate visible widths for proper padding
+      const labelText = style.label(` ${riskLabels[info.risk] || "ACTION"} `);
+      const catText = catColor(` [${info.category}]`);
+      const headerFixedContent = labelText + style.border("─") + catText;
+      const headerContent = headerFixedContent + style.border("─".repeat(Math.max(0, width - visibleWidth(headerFixedContent) - 3)));
+      const headerLine = style.border("│") + " " + headerContent + style.border("│");
+      lines.push(truncateToWidth(headerLine, width));
+      
+      // Separator
+      const sepLine = style.border("├") + style.border("─".repeat(width - 2)) + style.border("┤");
+      lines.push(truncateToWidth(sepLine, width));
+      
+      // Tool name and summary line
+      const nameStr = " " + chalk.bold.white(name) + " ";
+      const summaryStr = chalk.dim(info.summary.slice(0, width - name.length - 6));
+      const toolLine = style.border("│") + nameStr + summaryStr +
+        " ".repeat(Math.max(0, width - visibleWidth(nameStr) - visibleWidth(summaryStr) - 1)) +
+        style.border("│");
+      lines.push(truncateToWidth(toolLine, width));
+      
+      // Details lines (show up to 3 details)
+      if (info.details.length > 0) {
+        for (const detail of info.details.slice(0, 3)) {
+          const detailContent = " " + chalk.dim("• " + detail);
+          const detailLine = style.border("│") + detailContent +
+            " ".repeat(Math.max(0, width - visibleWidth(detailContent) - 1)) + style.border("│");
+          lines.push(truncateToWidth(detailLine, width));
+        }
+      }
+      
+      // Separator before keyboard hints
+      const sep2Line = style.border("├") + style.border("─".repeat(width - 2)) + style.border("┤");
+      lines.push(truncateToWidth(sep2Line, width));
+      
+      // Keyboard shortcuts line
+      const shortcutsContent = " " +
+        chalk.green.bold("[y]") + chalk.dim(" Yes  ") +
+        chalk.red.bold("[n]") + chalk.dim(" No  ") +
+        chalk.cyan.bold("[a]") + chalk.dim(" Approve all");
+      const shortcutsLine = style.border("│") + shortcutsContent +
+        " ".repeat(Math.max(0, width - visibleWidth(shortcutsContent) - 2)) + style.border("│");
+      lines.push(truncateToWidth(shortcutsLine, width));
+      
+      // Batch approval suggestion line
+      if (info.suggestion) {
+        const suggestContent = " " + chalk.blue.dim(info.suggestion);
+        const suggestLine = style.border("│") + suggestContent +
+          " ".repeat(Math.max(0, width - visibleWidth(suggestContent) - 2)) + style.border("│");
+        lines.push(truncateToWidth(suggestLine, width));
+      }
+      
+      // Bottom border
+      const bottomLine = style.border("└") + style.border("─".repeat(width - 2)) + style.border("┘");
+      lines.push(truncateToWidth(bottomLine, width));
     }
 
     return lines;
@@ -536,15 +689,13 @@ export function startApp(agent, initialPrompt, options = {}) {
 
   // ── State ──
   let busy = false;
+  let _cancelled = false; // Track if cancellation was already requested
   let askState = null;
   let approvalState = null;
-  let lastCtrlC = 0;
   let tokenUsage = null;
   let streamContent = "";
   let statusText = "";
   let streamThrottle = null;
-  let contextReady = false;
-  let minTimeElapsed = false;
   let isLoading = true;
   let gitStats = null;
 
@@ -1140,6 +1291,7 @@ Reflect on these logs and determine if there's a skill worth creating. Process a
         chatView.addLog(chalk.red(` ✗ Reflection failed: ${err.message}`));
       } finally {
         busy = false;
+        _cancelled = false;
         statusText = "";
         tui.requestRender();
       }
@@ -1253,6 +1405,7 @@ Reflect on these logs and determine if there's a skill worth creating. Process a
         chatView.addLog(chalk.red(` ✗ Review failed: ${err.message}`));
       } finally {
         busy = false;
+        _cancelled = false;
         statusText = "";
         tui.requestRender();
       }
@@ -1289,6 +1442,7 @@ Reflect on these logs and determine if there's a skill worth creating. Process a
         chatView.addLog(chalk.red(` ✗ Simplify failed: ${err.message}`));
       } finally {
         busy = false;
+        _cancelled = false;
         statusText = "";
         tui.requestRender();
       }
@@ -1312,6 +1466,7 @@ Reflect on these logs and determine if there's a skill worth creating. Process a
           chatView.addLog(chalk.red(` ✗ Architect failed: ${err.message}`));
         } finally {
           busy = false;
+          _cancelled = false;
           statusText = "";
           tui.requestRender();
         }
@@ -1370,6 +1525,10 @@ Reflect on these logs and determine if there's a skill worth creating. Process a
       } else {
         agent.approveCategory(category);
         chatView.addLog(chalk.dim(`    ⎿  Auto-approve enabled for: ${category}`));
+        // Persist to settings
+        saveSetting(agent.jailDirectory, "approvedCategories", [...agent.getApprovedCategories()]).catch((err) => {
+          chatView.addLog(chalk.dim(`    ⎿  (failed to save setting: ${err.message})`));
+        });
       }
       return;
     }
@@ -1408,6 +1567,7 @@ Reflect on these logs and determine if there's a skill worth creating. Process a
               chatView.addLog(chalk.red(` ✗ Skill execution failed: ${err.message}`));
             } finally {
               busy = false;
+              _cancelled = false;
               statusText = "";
               tui.requestRender();
             }
@@ -1484,6 +1644,7 @@ Reflect on these logs and determine if there's a skill worth creating. Process a
     }
 
     busy = false;
+    _cancelled = false;
     statusText = "";
     tui.requestRender();
   }
@@ -1624,14 +1785,6 @@ Reflect on these logs and determine if there's a skill worth creating. Process a
     updateContextBar();
   };
 
-  const onContextReady = () => {
-    contextReady = true;
-    if (minTimeElapsed) {
-      chatView.addLog(chalk.dim("    ⎿  (project context gathered)"));
-      switchToMainUI();
-    }
-  };
-
   const onError = (error) => {
     chatView.addLog(chalk.red(` ✗ ${error.message}`));
     tui.requestRender();
@@ -1696,7 +1849,6 @@ Reflect on these logs and determine if there's a skill worth creating. Process a
   agent.on("tool_call", onToolCall);
   agent.on("tool_result", onToolResult);
   agent.on("token_usage", onTokenUsage);
-  agent.on("context_ready", onContextReady);
   agent.on("error", onError);
   agent.on("retry", onRetry);
   agent.on("session_resumed", onSessionResumed);
@@ -1712,6 +1864,7 @@ Reflect on these logs and determine if there's a skill worth creating. Process a
     new Promise((resolve) => {
       askState = { question, resolve };
       busy = false;
+      _cancelled = false;
       tui.requestRender();
     }),
   );
@@ -1721,41 +1874,55 @@ Reflect on these logs and determine if there's a skill worth creating. Process a
     new Promise((resolve) => {
       approvalState = { name, args, resolve };
       busy = false;
+      _cancelled = false;
       statusText = "";
       tui.requestRender();
     }),
   );
 
   // ── Global key handler ──
+  let idleCtrlC = false; // Track if we've shown the idle Ctrl+C message
   tui.addInputListener((data) => {
     // Ctrl+C: cancel/exit
     if (matchesKey(data, "ctrl+c")) {
-      const now = Date.now();
-      if (now - lastCtrlC < 500) {
-        cleanup();
-        process.exit(0);
-      } else {
-        if (approvalState) {
-          const { name, resolve } = approvalState;
-          chatView.addLog(chalk.dim(`    ⎿  (denied ${name})`));
-          resolve({ approved: false });
-          approvalState = null;
-          lastCtrlC = now;
-          return { consume: true };
-        }
-        if (busy) {
-          agent.cancel();
-          streamContent = "";
-          if (streamThrottle) { clearTimeout(streamThrottle); streamThrottle = null; }
-          chatView.addLog(chalk.dim("    ⎿  (operation cancelled — press Ctrl+C again to quit)"));
-          busy = false;
-          statusText = "";
-        } else {
-          chatView.addLog(chalk.dim("    ⎿  (press Ctrl+C again to quit)"));
-        }
-        tui.requestRender();
-        lastCtrlC = now;
+      if (approvalState) {
+        const { name, resolve } = approvalState;
+        chatView.addLog(chalk.dim(`    ⎿  (denied ${name})`));
+        resolve({ approved: false });
+        approvalState = null;
+        return { consume: true };
       }
+      
+      if (busy) {
+        if (_cancelled) {
+          // Already cancelled - second Ctrl+C should exit
+          cleanup();
+          process.exit(0);
+        }
+        _cancelled = true;
+        idleCtrlC = true; // Set this so when busy becomes false, second Ctrl+C will exit
+        // Reset idleCtrlC after 2 seconds so user has a window to exit
+        setTimeout(() => { idleCtrlC = false; }, 2000);
+        agent.cancel();
+        streamContent = "";
+        if (streamThrottle) { clearTimeout(streamThrottle); streamThrottle = null; }
+        chatView.addLog(chalk.dim("    ⎿  (operation cancelled — press Ctrl+C again to quit)"));
+        // Don't set busy = false here - let the run() method complete naturally
+        // The finally block in the submit handler will set busy = false and reset _cancelled
+      } else {
+        // When idle, require two separate Ctrl+C presses (not a quick double-tap)
+        // First shows message, second actually exits
+        if (idleCtrlC) {
+          // Second Ctrl+C when idle - exit
+          cleanup();
+          process.exit(0);
+        }
+        idleCtrlC = true;
+        chatView.addLog(chalk.dim("    ⎿  (press Ctrl+C again to quit)"));
+        // Reset idleCtrlC after 2 seconds so accidental single press doesn't stick
+        setTimeout(() => { idleCtrlC = false; }, 2000);
+      }
+      tui.requestRender();
       return { consume: true };
     }
 
@@ -1771,10 +1938,17 @@ Reflect on these logs and determine if there's a skill worth creating. Process a
         resolve({ approved: false });
         approvalState = null;
       } else if (data === "a") {
+        // Approve all - save categories to settings for persistence
+        const allCategories = ["write", "execute", "network"];
+        for (const cat of allCategories) {
+          agent.approveCategory(cat);
+        }
+        agent._approveAll = true;
         chatView.addLog(chalk.dim("    ⎿  (approved all future tool calls — saved to settings)"));
         resolve({ approved: true, approveAll: true });
         approvalState = null;
-        saveSetting(agent.jailDirectory, "autoApprove", true).catch((err) => {
+        // Save approvedCategories for persistence across sessions
+        saveSetting(agent.jailDirectory, "approvedCategories", [...agent.getApprovedCategories()]).catch((err) => {
           chatView.addLog(chalk.dim(`    ⎿  (failed to save setting: ${err.message})`));
         });
       }
@@ -1803,7 +1977,6 @@ Reflect on these logs and determine if there's a skill worth creating. Process a
     agent.off("tool_call", onToolCall);
     agent.off("tool_result", onToolResult);
     agent.off("token_usage", onTokenUsage);
-    agent.off("context_ready", onContextReady);
     agent.off("error", onError);
     agent.off("retry", onRetry);
     agent.off("session_resumed", onSessionResumed);
@@ -1817,18 +1990,11 @@ Reflect on these logs and determine if there's a skill worth creating. Process a
   }
 
   // ── Init ──
-  agent._init().catch(() => {
-    contextReady = true;
-    if (minTimeElapsed) switchToMainUI();
+  agent._init().then(() => {
+    switchToMainUI();
+  }).catch(() => {
+    switchToMainUI();
   });
-
-  setTimeout(() => {
-    minTimeElapsed = true;
-    if (contextReady) {
-      chatView.addLog(chalk.dim("    ⎿  (project context gathered)"));
-      switchToMainUI();
-    }
-  }, 5000);
 
   tui.start();
 }

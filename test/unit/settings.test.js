@@ -83,6 +83,18 @@ describe('loadSettings', () => {
     // Should return defaults on error
     expect(settings.autoApprove).toBe(false);
   });
+
+  test('loads approvedCategories from file', async () => {
+    const settingsDir = path.join(tempDir, '.smol-agent');
+    fs.mkdirSync(settingsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(settingsDir, 'settings.json'),
+      JSON.stringify({ approvedCategories: ['write', 'execute'] })
+    );
+
+    const settings = await loadSettings(tempDir);
+    expect(settings.approvedCategories).toEqual(['write', 'execute']);
+  });
 });
 
 describe('saveSettings', () => {
@@ -138,6 +150,31 @@ describe('saveSettings', () => {
   test('returns merged settings', async () => {
     const result = await saveSettings(tempDir, { key: 'value' });
     expect(result.key).toBe('value');
+  });
+
+  test('blocks autoApprove from being saved (security)', async () => {
+    // Attempt to save autoApprove: true
+    await saveSettings(tempDir, { autoApprove: true, otherKey: 'value' });
+
+    const content = fs.readFileSync(
+      path.join(tempDir, '.smol-agent', 'settings.json'),
+      'utf-8'
+    );
+    const parsed = JSON.parse(content);
+    // autoApprove should NOT be saved (CLI-only)
+    expect(parsed.autoApprove).toBeUndefined();
+    expect(parsed.otherKey).toBe('value');
+  });
+
+  test('allows approvedCategories to be saved', async () => {
+    await saveSettings(tempDir, { approvedCategories: ['write', 'execute'] });
+
+    const content = fs.readFileSync(
+      path.join(tempDir, '.smol-agent', 'settings.json'),
+      'utf-8'
+    );
+    const parsed = JSON.parse(content);
+    expect(parsed.approvedCategories).toEqual(['write', 'execute']);
   });
 });
 

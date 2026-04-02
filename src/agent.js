@@ -277,8 +277,9 @@ export class Agent extends EventEmitter {
    * @param {string}  [options.jailDirectory] - Working directory jail
    * @param {boolean} [options.coreToolsOnly] - Restrict to core tools
    * @param {boolean} [options.programmaticToolCalling] - Enable programmatic tool calling
+   * @param {string[]} [options.approvedCategories] - Pre-approved tool categories from settings
    */
-  constructor({ host, model, provider, apiKey, llmProvider, contextSize, maxTokens, jailDirectory, coreToolsOnly, programmaticToolCalling } = {}) {
+  constructor({ host, model, provider, apiKey, llmProvider, contextSize, maxTokens, jailDirectory, coreToolsOnly, programmaticToolCalling, approvedCategories } = {}) {
     super();
 
     // Create or use the provided LLM provider
@@ -319,6 +320,13 @@ export class Agent extends EventEmitter {
     this._approvalHandler = null;
     this._approveAll = false;
     this._approvedCategories = new Set(["safe", "read"]); // reads are always auto-approved
+    // Load persisted approved categories from settings
+    if (approvedCategories && Array.isArray(approvedCategories)) {
+      for (const cat of approvedCategories) {
+        this._approvedCategories.add(cat);
+      }
+      logger.info(`Loaded approved categories from settings: ${approvedCategories.join(", ")}`);
+    }
 
     // Shift-left feedback — auto-lint after file modifications (Stripe Minions pattern)
     this._shiftLeft = new ShiftLeftFeedback(this.jailDirectory);
@@ -445,6 +453,18 @@ export class Agent extends EventEmitter {
    */
   getApprovedCategories() {
     return new Set(this._approvedCategories);
+  }
+
+  /**
+   * Set approved categories from loaded settings.
+   * Merges with existing approved categories.
+   * @param {string[]} categories - Categories to approve
+   */
+  setApprovedCategories(categories) {
+    for (const cat of categories) {
+      this._approvedCategories.add(cat);
+    }
+    logger.info(`Loaded approved categories from settings: ${categories.join(", ")}`);
   }
 
   // ── Progressive Tool Discovery ────────────────────────────────────
@@ -1413,10 +1433,18 @@ export class Agent extends EventEmitter {
       }
     }
 
-    // Iteration limit
+    // Iteration limit reached — provide helpful guidance
     this.running = false;
     this.abortController = null;
-    const msg = "(Agent reached maximum iteration limit)";
+    const iterationMsg = iterations - 1; // iterations was pre-incremented
+    const msg = `Reached the tool round limit (${iterationMsg} tool calls). The task may be too complex to complete in one session.
+
+Options to continue:
+1. Say "continue" — I'll pick up where we left off
+2. Describe what you want to focus on next — I'll prioritize the remaining work
+3. Rethink the approach — There may be a simpler way to accomplish your goal
+
+What would you like to do?`;
     this.emit("response", { content: msg });
     return msg;
   }
