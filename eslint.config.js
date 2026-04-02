@@ -82,6 +82,8 @@ export default [
       "coverage/**",
       ".smol-agent/**",
       "*.min.js",
+      "dist/**",
+      "harbor/**",
     ],
   },
 ];

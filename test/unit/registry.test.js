@@ -7,8 +7,13 @@
  * - getTools: Getting tools in OpenAI format
  * - getToolGroups, getToolsForGroups: Progressive discovery
  * - Approval categories and validation
+ * - getToolProperties: Per-input safety properties
+ * - getMaxResultSize: Per-tool result limits
+ * - getApprovalInfo: Approval UI formatting
  *
- * Dependencies: @jest/globals, ../../src/tools/registry.js
+ * @file-doc
+ * @module test/unit/registry.test
+ * @dependencies @jest/globals, ../../src/tools/registry.js
  */
 import { describe, test, expect, beforeEach } from '@jest/globals';
 import registry, {
@@ -77,6 +82,139 @@ describe('register and list', () => {
     const ollamaTools = registry.ollamaTools(true);
     const names = ollamaTools.map(t => t.function.name);
     expect(names).not.toContain(name);
+  });
+});
+
+// ── Per-Input Safety Properties ──────────────────────────────────────
+
+describe('getToolProperties', () => {
+  test('returns correct properties for read_file (always safe)', () => {
+    const props = registry.getToolProperties('read_file', { filePath: 'test.txt' });
+    expect(props.isReadOnly).toBe(true);
+    expect(props.isDestructive).toBe(false);
+    expect(props.isConcurrencySafe).toBe(true);
+    expect(props.category).toBe('read');
+  });
+
+  test('returns correct properties for write_file (never safe)', () => {
+    const props = registry.getToolProperties('write_file', { filePath: 'test.txt', content: 'data' });
+    expect(props.isReadOnly).toBe(false);
+    expect(props.isDestructive).toBe(false);
+    expect(props.isConcurrencySafe).toBe(false);
+    expect(props.category).toBe('write');
+  });
+
+  test('returns correct properties for run_command with safe command', () => {
+    const props = registry.getToolProperties('run_command', { command: 'ls -la' });
+    expect(props.isReadOnly).toBe(true);
+    expect(props.isDestructive).toBe(false);
+    expect(props.isConcurrencySafe).toBe(true);
+    expect(props.category).toBe('execute');
+  });
+
+  test('returns correct properties for run_command with destructive command', () => {
+    const props = registry.getToolProperties('run_command', { command: 'rm -rf /' });
+    expect(props.isReadOnly).toBe(false);
+    expect(props.isDestructive).toBe(true);
+    expect(props.isConcurrencySafe).toBe(false);
+    expect(props.category).toBe('execute');
+  });
+
+  test('returns correct properties for git status (read-only)', () => {
+    const props = registry.getToolProperties('git', { args: ['status'] });
+    expect(props.isReadOnly).toBe(true);
+    expect(props.isConcurrencySafe).toBe(true);
+  });
+
+  test('returns default properties for unknown tools', () => {
+    const props = registry.getToolProperties('unknown_tool_xyz', {});
+    expect(props.category).toBe('other');
+    expect(props.isReadOnly).toBe(false);
+    expect(props.isDestructive).toBe(false);
+  });
+});
+
+// ── Per-Tool Result Size Limits ────────────────────────────────────────
+
+describe('getMaxResultSize', () => {
+  test('returns Infinity for read_file (has its own limiting)', () => {
+    expect(registry.getMaxResultSize('read_file')).toBe(Infinity);
+  });
+
+  test('returns defined limit for run_command', () => {
+    expect(registry.getMaxResultSize('run_command')).toBe(50000);
+  });
+
+  test('returns defined limit for grep', () => {
+    expect(registry.getMaxResultSize('grep')).toBe(30000);
+  });
+
+  test('returns defined limit for delegate', () => {
+    expect(registry.getMaxResultSize('delegate')).toBe(20000);
+  });
+
+  test('returns default for unknown tools', () => {
+    expect(registry.getMaxResultSize('unknown_tool_xyz')).toBe(100000);
+  });
+});
+
+// ── Approval Info ──────────────────────────────────────────────────────
+
+describe('getApprovalInfo', () => {
+  test('returns correct info for read_file (low risk)', () => {
+    const info = registry.getApprovalInfo('read_file', { filePath: 'test.js' });
+    expect(info.category).toBe('read');
+    expect(info.risk).toBe('low');
+    expect(info.isReadOnly).toBe(true);
+    expect(info.isDestructive).toBe(false);
+    expect(info.summary).toBe('test.js');
+    expect(info.details).toContain('Read-only operation');
+    expect(info.details).toContain('File: test.js');
+    expect(info.suggestion).toBe('');  // No suggestion for read
+  });
+
+  test('returns correct info for write_file (medium risk)', () => {
+    const info = registry.getApprovalInfo('write_file', { filePath: 'test.js', content: 'x'.repeat(100) });
+    expect(info.category).toBe('write');
+    expect(info.risk).toBe('medium');
+    expect(info.isReadOnly).toBe(false);
+    expect(info.summary).toBe('test.js (100 bytes)');
+    expect(info.suggestion).toContain('/approve write');
+  });
+
+  test('returns correct info for run_command with safe command', () => {
+    const info = registry.getApprovalInfo('run_command', { command: 'ls -la' });
+    expect(info.category).toBe('execute');
+    expect(info.risk).toBe('low');  // read-only
+    expect(info.isReadOnly).toBe(true);
+    expect(info.details).toContain('Read-only operation');
+  });
+
+  test('returns correct info for run_command with destructive command', () => {
+    const info = registry.getApprovalInfo('run_command', { command: 'rm -rf /' });
+    expect(info.category).toBe('execute');
+    expect(info.risk).toBe('critical');
+    expect(info.isDestructive).toBe(true);
+    expect(info.details.some(d => d.includes('destructive'))).toBe(true);
+  });
+
+  test('returns correct info for git status (read-only)', () => {
+    const info = registry.getApprovalInfo('git', { args: ['status'] });
+    expect(info.category).toBe('execute');
+    expect(info.risk).toBe('low');
+    expect(info.isReadOnly).toBe(true);
+  });
+
+  test('includes suggestion for batch approval', () => {
+    const info = registry.getApprovalInfo('write_file', { filePath: 'test.js' });
+    expect(info.suggestion).toBe('/approve write to auto-approve all write operations');
+  });
+
+  test('truncates long summaries', () => {
+    const longCommand = 'x'.repeat(100);
+    const info = registry.getApprovalInfo('run_command', { command: longCommand });
+    expect(info.summary.length).toBeLessThan(70);
+    expect(info.summary).toContain('...');
   });
 });
 
@@ -168,7 +306,7 @@ describe('execute', () => {
 
   test('returns error for unknown tool', async () => {
     const result = await registry.execute('nonexistent_tool_xyz', {});
-    expect(result.error).toContain('Unknown tool');
+    expect(result.error.message).toContain('Unknown tool');
   });
 
   test('returns error for invalid args', async () => {
@@ -186,7 +324,9 @@ describe('execute', () => {
     });
 
     const result = await registry.execute(name, {});
-    expect(result.error).toContain('Missing required argument');
+    expect(result.error).toBeTruthy();
+    expect(result.error.message || result.error).toContain('Validation failed');
+    expect(JSON.stringify(result.error)).toContain('Missing required argument: requiredArg');
   });
 });
 
