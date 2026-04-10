@@ -588,6 +588,7 @@ export function startApp(agent, initialPrompt, options = {}) {
     { name: "agents", description: "List registered agents and their relationships" },
     { name: "agent", description: "Manage agents (info/link/unlink/snippet/role/remove)" },
     { name: "document", description: "Run full codebase documentation pass on files >100 lines" },
+    { name: "caveman", description: "Toggle caveman mode (/caveman [lite|full|ultra|off])" },
     { name: "exit", description: "Exit the agent" },
   ];
   
@@ -1354,6 +1355,29 @@ Reflect on these logs and determine if there's a skill worth creating. Process a
       return;
     }
 
+    // /caveman — toggle caveman mode (ultra-compressed communication)
+    if (trimmed === "/caveman" || trimmed.startsWith("/caveman ")) {
+      const arg = trimmed.slice("/caveman".length).trim().toLowerCase();
+      if (arg === "off" || arg === "disable" || arg === "stop") {
+        agent.setCavemanMode(null);
+        chatView.addLog(chalk.dim("    ⎿  Caveman mode disabled. Normal communication restored."));
+      } else if (arg === "lite" || arg === "full" || arg === "ultra") {
+        agent.setCavemanMode(arg);
+        chatView.addLog(chalk.dim(`    ⎿  Caveman mode: ${arg}. Output tokens reduced ~75%.`));
+      } else if (arg === "" || arg === "on") {
+        // Toggle: if already on, show status; if off, enable default (full)
+        if (agent.cavemanMode) {
+          chatView.addLog(chalk.dim(`    ⎿  Caveman mode: ${agent.cavemanMode}. Use /caveman off to disable, or /caveman lite|full|ultra to switch.`));
+        } else {
+          agent.setCavemanMode("full");
+          chatView.addLog(chalk.dim("    ⎿  Caveman mode: full. Why use many token when few do trick."));
+        }
+      } else {
+        chatView.addLog(chalk.dim("    ⎿  Usage: /caveman [lite|full|ultra|off]"));
+      }
+      return;
+    }
+
     // /approve <category> — auto-approve a tool category
     if (trimmed.startsWith("/approve")) {
       const category = trimmed.slice("/approve".length).trim();
@@ -1380,7 +1404,7 @@ Reflect on these logs and determine if there's a skill worth creating. Process a
         !trimmed.startsWith("/quit") && !trimmed.startsWith("/reflect") && !trimmed.startsWith("/document") && !trimmed.startsWith("/skills") &&
         !trimmed.startsWith("/session") && !trimmed.startsWith("/sessions") &&
         !trimmed.startsWith("/architect") && !trimmed.startsWith("/review") && !trimmed.startsWith("/undo") && !trimmed.startsWith("/checkpoints") &&
-        !trimmed.startsWith("/approve") && !trimmed.startsWith("/agents") && !trimmed.startsWith("/agent")) {
+        !trimmed.startsWith("/approve") && !trimmed.startsWith("/caveman") && !trimmed.startsWith("/agents") && !trimmed.startsWith("/agent")) {
       const skillName = trimmed.slice(1).split(/\s+/)[0];
       
       // Check if this matches a skill

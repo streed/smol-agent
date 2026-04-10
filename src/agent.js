@@ -81,6 +81,8 @@ import "./tools/session_tools.js";
 import "./tools/code_execution.js";
 import { setActivateGroupCallback } from "./tools/discover_tools.js";
 import { LRUToolCache } from "./lru-tool-cache.js";
+import { buildCavemanPrompt, buildCavemanCommitRules, buildCavemanReviewRules, CAVEMAN_LEVELS, DEFAULT_LEVEL } from "./caveman.js";
+import { setCompressProvider } from "./tools/caveman_compress.js";
 
 // ── Thinking tags parser ─────────────────────────────────────────────
 
@@ -330,6 +332,12 @@ export class Agent extends EventEmitter {
     // Architect mode — two-pass planning/execution (Aider/Kilocode pattern)
     this._architectMode = false;
 
+    // Caveman mode — ultra-compressed communication (JuliusBrussee/caveman)
+    // When active, injects terse communication rules into the system prompt
+    // to cut output tokens ~75% while preserving technical accuracy.
+    // Values: null (off), "lite", "full", "ultra"
+    this._cavemanMode = null;
+
     // Progressive tool discovery — start with starter groups, unlock more on demand.
     // All models now use progressive discovery with the same tool set.
     // The agent starts with starter groups + discover_tools meta-tool,
@@ -396,6 +404,9 @@ export class Agent extends EventEmitter {
     setCrossAgentConfig({
       onProgress: (e) => this.emit("cross_agent_progress", e),
     });
+
+    // Configure caveman compress tool with the LLM provider
+    setCompressProvider(this.llmProvider);
   }
 
   /**
@@ -541,6 +552,27 @@ export class Agent extends EventEmitter {
         logger.info("Auto-discovered multi_agent group from context");
       }
     }
+
+    // Caveman mode — auto-activate from natural language triggers
+    if (!this._cavemanMode) {
+      const cavemanSignals = [
+        "caveman mode", "talk like caveman", "use caveman",
+        "less tokens", "be brief", "fewer tokens",
+      ];
+      if (cavemanSignals.some(s => lower.includes(s))) {
+        this.setCavemanMode(DEFAULT_LEVEL);
+        logger.info("Auto-discovered caveman mode from context");
+      }
+    }
+
+    // Caveman off — detect "stop caveman" or "normal mode" to disable
+    if (this._cavemanMode) {
+      const offSignals = ["stop caveman", "normal mode", "disable caveman", "caveman off"];
+      if (offSignals.some(s => lower.includes(s))) {
+        this.setCavemanMode(null);
+        logger.info("Caveman mode disabled from context");
+      }
+    }
   }
 
   /**
@@ -583,6 +615,66 @@ export class Agent extends EventEmitter {
   /** Check if architect mode is enabled. */
   get architectMode() {
     return this._architectMode;
+  }
+
+  // ── Caveman Mode ─────────────────────────────────────────────────
+
+  /**
+   * Enable, change, or disable caveman mode.
+   * When enabled, the agent communicates in ultra-compressed style to
+   * reduce output tokens ~75% while preserving technical accuracy.
+   *
+   * @param {string|null} level - "lite", "full", "ultra", or null to disable
+   */
+  setCavemanMode(level) {
+    if (level && !CAVEMAN_LEVELS.has(level)) {
+      level = DEFAULT_LEVEL;
+    }
+    this._cavemanMode = level || null;
+    logger.info(`Caveman mode ${level ? `enabled (${level})` : "disabled"}`);
+
+    // Auto-activate the caveman tool group when caveman mode is enabled
+    if (level && this._progressiveDiscovery && !this._activeToolGroups.has("caveman")) {
+      this._activateToolGroups(["caveman"]);
+    }
+
+    // Rebuild system message to inject/remove caveman rules
+    if (this._initialized && this.messages.length > 0) {
+      this._rebuildSystemMessage();
+    }
+  }
+
+  /** Get current caveman mode level (null if disabled). */
+  get cavemanMode() {
+    return this._cavemanMode;
+  }
+
+  /**
+   * Rebuild the system message to reflect current caveman mode state.
+   * This patches the existing system message instead of re-gathering
+   * all context, keeping the operation cheap.
+   */
+  _rebuildSystemMessage() {
+    if (!this.messages[0] || this.messages[0].role !== "system") return;
+
+    let content = this.messages[0].content;
+
+    // Remove any existing caveman block
+    content = content.replace(/\n\n## Caveman Mode[\s\S]*?(?=\n\n## |\n\n# |$)/, "");
+
+    // Inject caveman block if active
+    if (this._cavemanMode) {
+      const cavemanBlock = `\n\n## Caveman Mode\n${buildCavemanPrompt(this._cavemanMode)}\n\n${buildCavemanCommitRules()}\n\n${buildCavemanReviewRules()}`;
+      // Insert before "# Project context" if present, otherwise append
+      const contextIdx = content.indexOf("\n\n# Project context");
+      if (contextIdx !== -1) {
+        content = content.slice(0, contextIdx) + cavemanBlock + content.slice(contextIdx);
+      } else {
+        content += cavemanBlock;
+      }
+    }
+
+    this.messages[0].content = content;
   }
 
   /** Get current token usage info. */
@@ -719,9 +811,15 @@ export class Agent extends EventEmitter {
       }
     } catch { /* no plan */ }
 
+    // Caveman mode — inject terse communication rules when active
+    let cavemanBlock = "";
+    if (this._cavemanMode) {
+      cavemanBlock = `\n\n## Caveman Mode\n${buildCavemanPrompt(this._cavemanMode)}\n\n${buildCavemanCommitRules()}\n\n${buildCavemanReviewRules()}`;
+    }
+
     const systemContent = contextBlock
-      ? `${SYSTEM_PROMPT}${toolSchemaBlock}${extendedNote}${planBlock}\n\n# Project context\n\n${contextBlock}`
-      : `${SYSTEM_PROMPT}${toolSchemaBlock}${extendedNote}${planBlock}`;
+      ? `${SYSTEM_PROMPT}${toolSchemaBlock}${extendedNote}${planBlock}${cavemanBlock}\n\n# Project context\n\n${contextBlock}`
+      : `${SYSTEM_PROMPT}${toolSchemaBlock}${extendedNote}${planBlock}${cavemanBlock}`;
 
     this.messages = [{ role: "system", content: systemContent }];
     this._initialized = true;

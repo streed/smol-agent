@@ -121,6 +121,10 @@ const TOOL_GROUPS = {
     tools: ["delegate", "send_letter", "check_reply", "read_inbox", "read_outbox", "reply_to_letter", "list_agents", "link_repos", "set_snippet", "find_agent_for_task"],
     description: "Delegate to sub-agents, cross-agent messaging, agent registry",
   },
+  caveman: {
+    tools: ["caveman_compress"],
+    description: "Compress markdown/text files into caveman format to reduce token usage",
+  },
 };
 
 // The starter groups always active at the beginning of a run
@@ -168,6 +172,7 @@ const TOOL_CATEGORIES = {
   set_snippet: "safe",
   find_agent_for_task: "safe",
   code_execution: "execute",
+  caveman_compress: "write",
 };
 
 /**
