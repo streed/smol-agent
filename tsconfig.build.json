@@ -1,0 +1,23 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    // Stricter settings for production builds
+    "strict": true,
+    "noImplicitAny": true,
+    "strictNullChecks": true,
+    
+    // Emit declarations
+    "declaration": true,
+    "declarationMap": true,
+    
+    // No source maps for production (smaller output)
+    "sourceMap": false
+  },
+  "exclude": [
+    "node_modules",
+    "dist",
+    "test",
+    "**/*.test.ts",
+    "**/*.spec.ts"
+  ]
+}
