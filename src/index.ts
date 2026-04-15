@@ -42,7 +42,7 @@ import { listSessions, findSession } from "./sessions.js";
 import { cleanup as cleanupTiktoken } from "./token-estimator.js";
 import { execSync } from "node:child_process";
 import { createProvider } from "./providers/index.js";
-import { gatherContext } from "./context.js";
+
 
 // XDG-compliant global config directory
 const XDG_CONFIG_HOME = process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config");
@@ -153,7 +153,7 @@ Usage:
 
 Options:
   -m, --model <name>        Model to use (default depends on provider)
-  -p, --provider <name>     LLM provider: ollama, openai, anthropic, grok (default: ollama)
+  -p, --provider <name>     LLM provider: ollama, ollama-api, openai, anthropic, grok, groq, gemini (default: ollama)
   -H, --host <url>          Provider host/base URL (default: provider-specific)
       --api-key <key>       API key for cloud providers (or use env vars)
 
@@ -179,6 +179,7 @@ Options:
 
 Providers:
   ollama (default)    Local LLMs via Ollama. Uses OLLAMA_HOST or http://localhost:11434
+  ollama-api          Ollama via OpenAI-compatible API. Uses OLLAMA_API_KEY env var (optional)
   openai              OpenAI GPT models. Uses OPENAI_API_KEY env var
   anthropic           Anthropic Claude models. Uses ANTHROPIC_API_KEY env var
   grok                xAI Grok models. Uses XAI_API_KEY env var
@@ -187,7 +188,7 @@ Providers:
   codex               OpenAI Codex CLI. No API key needed (uses installed CLI)
 
 Environment Variables:
-  SMOL_AGENT_PROVIDER    Default provider (ollama, openai, anthropic, grok, groq, gemini)
+  SMOL_AGENT_PROVIDER    Default provider (ollama, ollama-api, openai, anthropic, grok, groq, gemini)
   SMOL_AGENT_MODEL       Default model name
   SMOL_AGENT_HOST        Default host/base URL
   SMOL_AGENT_API_KEY     API key for cloud providers (alternative to --api-key)
@@ -444,10 +445,9 @@ async function main(): Promise<void> {
   });
 
   const contextSize = typeof settings.contextSize === 'number' ? settings.contextSize : undefined;
-  const context = await gatherContext(jailDirectory, contextSize);
 
   const agent = new Agent({
-    provider: prov,
+    llmProvider: prov,
     model: modelName,
     jailDirectory,
     autoApprove,
@@ -473,7 +473,7 @@ async function main(): Promise<void> {
   }
 
   // Start UI
-  await startApp(agent, context, promptText);
+  await startApp(agent, promptText);
 }
 
 main().catch((err: Error) => {
