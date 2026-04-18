@@ -10,14 +10,17 @@
  * - Stream events in real-time
  *
  * Key components:
- * - SmolACPAgent: Main ACP handler class implementing initialize/newSession/prompt/cancel
- * - Tool kind mapping: Maps smol-agent tools to ACP tool kinds (read/edit/execute/fetch/think)
+ * - SmolACPAgent: initialize, newSession, loadSession, resume (unstable), list (unstable),
+ *   setSessionMode, setSessionConfigOption, authenticate, prompt, cancel
+ * - Prompt content: Text, resource_link (reads files inside jail), embedded text resources
+ * - Tool kind mapping: ./acp-content.js (shared with remote-server.js)
+ * - Session IDs: Same IDs as on-disk `.smol-agent` sessions (startSession on new)
  * - Session management: TTL-based cleanup, max 1 concurrent session (global singleton safety)
- * - Authentication: Optional token-based auth with constant-time comparison
+ * - Authentication: Optional token via authenticate._meta.token (constant-time compare)
  *
  * Dependencies: @agentclientprotocol/sdk, node:stream, node:crypto, node:path, node:module,
- *               ./agent.js, ./tools/ask_user.js, ./settings.js, ./logger.js, ./tools/registry.js,
- *               ../package.json
+ *               ./runtime/interactive-agent.js, ./acp-content.js, ./sessions.js, ./tools/ask_user.js,
+ *               ./settings.js, ./logger.js, ./tools/registry.js, ./ui/diff.js, ../package.json
  * Depended on by: src/index.js
  *
  * @module acp-server
@@ -33,36 +36,16 @@ import { logger } from "./logger.js";
 import { requiresApproval } from "./tools/registry.js";
 import { formatDiff, formatReplaceDiff, formatNewFileDiff } from "./ui/diff.js";
 import { createSessionAgent } from "./runtime/interactive-agent.js";
+import { listSessions } from "./sessions.js";
+import {
+  acpToolKind,
+  applySessionMode,
+  getSessionModeState,
+  promptBlocksToUserText,
+} from "./acp-content.js";
 
 const require = createRequire(import.meta.url);
 const { version: PACKAGE_VERSION } = require("../package.json");
-
-// ── Tool kind mapping ───────────────────────────────────────────────
-
-const TOOL_KIND_MAP = {
-  read_file: "read",
-  list_files: "read",
-  grep: "search",
-  write_file: "edit",
-  replace_in_file: "edit",
-  run_command: "execute",
-  web_search: "fetch",
-  web_fetch: "fetch",
-  reflect: "think",
-  remember: "think",
-  recall: "think",
-  delegate: "other",
-  ask_user: "other",
-  save_plan: "think",
-  get_current_plan: "think",
-  complete_plan_step: "think",
-  load_plan_progress: "think",
-  update_plan_status: "think",
-};
-
-function toolKind(name) {
-  return TOOL_KIND_MAP[name] || "other";
-}
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -109,20 +92,37 @@ class SmolACPAgent {
   async initialize(params) {
     const clientInfo = params.clientInfo;
     logger.info(`[ACP] initialize — client: ${clientInfo?.name || "unknown"} ${clientInfo?.version || ""}, protocol: ${params.protocolVersion}`);
-    return {
+    const response = {
       protocolVersion: acp.PROTOCOL_VERSION,
       agentCapabilities: {
-        loadSession: false,
+        loadSession: true,
+        promptCapabilities: {
+          embeddedContext: true,
+        },
+        sessionCapabilities: {
+          list: {},
+          resume: {},
+        },
       },
       agentInfo: {
         name: "smol-agent",
         version: PACKAGE_VERSION,
       },
     };
+    if (this._authToken) {
+      response.authMethods = [
+        {
+          id: "smol_bearer",
+          name: "Bearer token",
+          description:
+            "Pass the shared secret as authenticate._meta.token (same value as SMOL_AGENT_AUTH_TOKEN / --auth-token).",
+        },
+      ];
+    }
+    return response;
   }
 
   async newSession(params) {
-    const sessionId = crypto.randomUUID();
     const cwd = params.cwd || process.cwd();
 
     // Validate CWD to prevent jail escape via arbitrary system paths
@@ -138,33 +138,238 @@ class SmolACPAgent {
       throw new acp.RequestError(-32602, `Maximum concurrent sessions (${MAX_SESSIONS}) reached. Close the existing session before opening a new one.`);
     }
 
+    const settings = await loadSettings(resolved);
+    const contextSize =
+      typeof this._contextSize === "number"
+        ? this._contextSize
+        : typeof settings.contextSize === "number"
+          ? settings.contextSize
+          : undefined;
+
     const { agent } = await createSessionAgent({
       host: this._host,
       model: this._model,
       provider: this._provider,
       apiKey: this._apiKey,
+      contextSize,
+      coreToolsOnly: this._coreToolsOnly,
       jailDirectory: resolved,
       programmaticToolCalling: this._programmaticToolCalling,
     });
 
-    // Load persisted settings
-    const settings = await loadSettings(cwd);
     if (this._autoApprove || settings.autoApprove) {
       agent._approveAll = true;
     }
 
+    agent.startSession();
+    const smolSession = agent.getSession();
+    const sessionId = smolSession.id;
+
     this.sessions.set(sessionId, { agent, callCounter: 0, lastActivity: Date.now() });
     logger.info(`[ACP] session/new — id: ${sessionId}, cwd: ${cwd}, model: ${this._model || "default"}, autoApprove: ${agent._approveAll}`);
-    return { sessionId };
+    return {
+      sessionId,
+      modes: getSessionModeState(agent),
+    };
+  }
+
+  async loadSession(params) {
+    const cwd = params.cwd || process.cwd();
+    const resolved = path.resolve(cwd);
+    const BLOCKED_ROOTS = ["/", "/etc", "/root", "/boot", "/bin", "/sbin", "/usr", "/lib", "/lib64", "/dev", "/proc", "/sys", "/var"];
+    if (BLOCKED_ROOTS.includes(resolved)) {
+      throw new acp.RequestError(-32602, `Blocked: '${cwd}' is not allowed as a session working directory`);
+    }
+    if (this.sessions.size >= MAX_SESSIONS) {
+      throw new acp.RequestError(-32602, `Maximum concurrent sessions (${MAX_SESSIONS}) reached. Close the existing session before opening a new one.`);
+    }
+
+    const settings = await loadSettings(resolved);
+    const contextSize =
+      typeof this._contextSize === "number"
+        ? this._contextSize
+        : typeof settings.contextSize === "number"
+          ? settings.contextSize
+          : undefined;
+
+    const { agent, resumed } = await createSessionAgent({
+      host: this._host,
+      model: this._model,
+      provider: this._provider,
+      apiKey: this._apiKey,
+      contextSize,
+      coreToolsOnly: this._coreToolsOnly,
+      jailDirectory: resolved,
+      programmaticToolCalling: this._programmaticToolCalling,
+      sessionId: params.sessionId,
+    });
+    if (!resumed) {
+      throw acp.RequestError.resourceNotFound(`Session not found: ${params.sessionId}`);
+    }
+
+    if (this._autoApprove || settings.autoApprove) {
+      agent._approveAll = true;
+    }
+
+    const sessionId = params.sessionId;
+    this.sessions.set(sessionId, { agent, callCounter: 0, lastActivity: Date.now() });
+
+    await this._replayLoadedHistory(sessionId, agent);
+
+    logger.info(`[ACP] session/load — id: ${sessionId}, cwd: ${cwd}, messages: ${agent.messages?.length || 0}`);
+    return {
+      modes: getSessionModeState(agent),
+    };
+  }
+
+  async unstable_resumeSession(params) {
+    const cwd = params.cwd || process.cwd();
+    const resolved = path.resolve(cwd);
+    const BLOCKED_ROOTS = ["/", "/etc", "/root", "/boot", "/bin", "/sbin", "/usr", "/lib", "/lib64", "/dev", "/proc", "/sys", "/var"];
+    if (BLOCKED_ROOTS.includes(resolved)) {
+      throw new acp.RequestError(-32602, `Blocked: '${cwd}' is not allowed as a session working directory`);
+    }
+    if (this.sessions.size >= MAX_SESSIONS) {
+      throw new acp.RequestError(-32602, `Maximum concurrent sessions (${MAX_SESSIONS}) reached. Close the existing session before opening a new one.`);
+    }
+
+    const settings = await loadSettings(resolved);
+    const contextSize =
+      typeof this._contextSize === "number"
+        ? this._contextSize
+        : typeof settings.contextSize === "number"
+          ? settings.contextSize
+          : undefined;
+
+    const { agent, resumed } = await createSessionAgent({
+      host: this._host,
+      model: this._model,
+      provider: this._provider,
+      apiKey: this._apiKey,
+      contextSize,
+      coreToolsOnly: this._coreToolsOnly,
+      jailDirectory: resolved,
+      programmaticToolCalling: this._programmaticToolCalling,
+      sessionId: params.sessionId,
+    });
+    if (!resumed) {
+      throw acp.RequestError.resourceNotFound(`Session not found: ${params.sessionId}`);
+    }
+
+    if (this._autoApprove || settings.autoApprove) {
+      agent._approveAll = true;
+    }
+
+    const sessionId = params.sessionId;
+    this.sessions.set(sessionId, { agent, callCounter: 0, lastActivity: Date.now() });
+
+    logger.info(`[ACP] session/resume — id: ${sessionId}, cwd: ${cwd}`);
+    return {
+      modes: getSessionModeState(agent),
+    };
+  }
+
+  async unstable_listSessions(params) {
+    const cwd = params.cwd ? path.resolve(params.cwd) : process.cwd();
+    const all = await listSessions(cwd);
+    const offset = params.cursor ? parseInt(params.cursor, 10) : 0;
+    const start = Number.isFinite(offset) ? offset : 0;
+    const pageSize = 50;
+    const slice = all.slice(start, start + pageSize);
+    const sessions = slice.map((s) => ({
+      sessionId: s.id,
+      cwd,
+      title: s.name || s.summary || null,
+      updatedAt: s.updatedAt,
+    }));
+    const nextCursor = start + slice.length < all.length ? String(start + slice.length) : null;
+    return { sessions, nextCursor };
+  }
+
+  async setSessionMode(params) {
+    const session = this.sessions.get(params.sessionId);
+    if (!session) {
+      throw new acp.RequestError(-32602, `Unknown session: ${params.sessionId}`);
+    }
+    try {
+      applySessionMode(session.agent, params.modeId);
+    } catch (e) {
+      throw new acp.RequestError(-32602, e.message || String(e));
+    }
+    this._notifyModeUpdate(params.sessionId, session.agent);
+    return {};
+  }
+
+  async setSessionConfigOption(_params) {
+    return { configOptions: [] };
+  }
+
+  _notifyModeUpdate(sessionId, agent) {
+    const state = getSessionModeState(agent);
+    safeSessionUpdate(this.connection, {
+      sessionId,
+      update: {
+        sessionUpdate: "current_mode_update",
+        currentModeId: state.currentModeId,
+      },
+    });
+  }
+
+  async _replayLoadedHistory(sessionId, agent) {
+    const conn = this.connection;
+    for (const m of agent.messages || []) {
+      if (m.role === "system") continue;
+      const text =
+        typeof m.content === "string" ? m.content : JSON.stringify(m.content ?? "");
+      if (m.role === "user") {
+        safeSessionUpdate(conn, {
+          sessionId,
+          update: {
+            sessionUpdate: "user_message_chunk",
+            content: { type: "text", text },
+          },
+        });
+      } else if (m.role === "assistant") {
+        safeSessionUpdate(conn, {
+          sessionId,
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text },
+          },
+        });
+      } else if (m.role === "tool") {
+        safeSessionUpdate(conn, {
+          sessionId,
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: {
+              type: "text",
+              text: `[tool ${m.name || "result"}]\n${text}`,
+            },
+          },
+        });
+      }
+    }
   }
 
   async authenticate(params) {
-    // If a token was configured, validate it with constant-time comparison
-    if (this._authToken) {
-      const provided = params?.token || params?.credentials?.token;
-      if (!provided || !constantTimeEqual(this._authToken, provided)) {
-        throw new acp.RequestError(-32600, "Authentication failed: invalid or missing token");
-      }
+    if (!this._authToken) {
+      return {};
+    }
+    const mid = params?.methodId;
+    if (mid && mid !== "smol_bearer") {
+      throw new acp.RequestError(-32600, `Unsupported authentication method: ${mid}`);
+    }
+    // zAuthenticateRequest only allows methodId + _meta; unknown top-level keys are stripped.
+    // Clients should pass the secret in `_meta.token` (or set SMOL_AGENT_AUTH_TOKEN in the agent env).
+    const meta = params?._meta;
+    const fromMeta =
+      meta && typeof meta === "object" && meta !== null && "token" in meta
+        ? meta.token
+        : undefined;
+    const provided = params?.token ?? params?.credentials?.token ?? fromMeta;
+    if (!provided || !constantTimeEqual(this._authToken, String(provided))) {
+      throw new acp.RequestError(-32600, "Authentication failed: invalid or missing token");
     }
     return {};
   }
@@ -194,11 +399,9 @@ class SmolACPAgent {
     session.lastActivity = now;
     const { agent } = session;
 
-    // Extract text from content blocks
-    const text = contentBlocks
-      .filter((b) => b.type === "text")
-      .map((b) => b.text)
-      .join("\n");
+    const text = await promptBlocksToUserText(contentBlocks, session.agent.jailDirectory, {
+      embeddedContext: true,
+    });
 
     const promptPreview = text.length > 100 ? text.slice(0, 100) + "…" : text;
     logger.info(`[ACP] prompt — session: ${sessionId.slice(0, 8)}…, text: "${promptPreview}"`);
@@ -311,7 +514,7 @@ class SmolACPAgent {
           logArgs[k] = v;
         }
       }
-      logger.info(`[ACP] tool_call — ${callId}: ${name} ${JSON.stringify(logArgs)}, kind: ${toolKind(name)}`);
+      logger.info(`[ACP] tool_call — ${callId}: ${name} ${JSON.stringify(logArgs)}, kind: ${acpToolKind(name)}`);
 
       const locations = [];
       if (args?.filePath) {
@@ -324,7 +527,7 @@ class SmolACPAgent {
           sessionUpdate: "tool_call",
           toolCallId: callId,
           title: `${name}(${Object.keys(args || {}).join(", ")})`,
-          kind: toolKind(name),
+          kind: acpToolKind(name),
           status: "in_progress",
           locations: locations.length > 0 ? locations : undefined,
           rawInput: args,
@@ -419,7 +622,7 @@ class SmolACPAgent {
             toolCall: {
               toolCallId: callId,
               title: `${name}(${Object.keys(args || {}).join(", ")})`,
-              kind: toolKind(name),
+              kind: acpToolKind(name),
               status: "pending",
               rawInput: args,
               locations: args?.filePath

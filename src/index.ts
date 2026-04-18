@@ -382,6 +382,8 @@ async function main(): Promise<void> {
   // Handle --acp
   if (acpMode) {
     const { startACPServer } = await import("./acp-server.js");
+    const settings = await loadSettings(jailDirectory);
+    const contextSize = typeof settings.contextSize === "number" ? settings.contextSize : undefined;
     startACPServer({
       jailDirectory,
       model,
@@ -389,6 +391,10 @@ async function main(): Promise<void> {
       host,
       apiKey,
       programmaticToolCalling: programmaticTools,
+      autoApprove,
+      authToken: authToken || process.env.SMOL_AGENT_AUTH_TOKEN,
+      coreToolsOnly: false,
+      contextSize,
     });
     return;
   }

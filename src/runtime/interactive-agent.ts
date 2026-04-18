@@ -7,6 +7,7 @@ export interface InteractiveAgentOptions {
   host?: string;
   apiKey?: string;
   contextSize?: number;
+  coreToolsOnly?: boolean;
   approvedCategories?: string[];
   programmaticToolCalling?: boolean;
   sessionId?: string;
@@ -19,6 +20,7 @@ export async function createSessionAgent({
   host,
   apiKey,
   contextSize,
+  coreToolsOnly,
   approvedCategories,
   programmaticToolCalling,
   sessionId,
@@ -30,6 +32,7 @@ export async function createSessionAgent({
     apiKey,
     contextSize,
     jailDirectory,
+    coreToolsOnly,
     approvedCategories,
     programmaticToolCalling,
   });

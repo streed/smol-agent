@@ -44,6 +44,7 @@ import { loadSettings } from "./settings.js";
 import { logger } from "./logger.js";
 import { requiresApproval } from "./tools/registry.js";
 import { createSessionAgent } from "./runtime/interactive-agent.js";
+import { acpToolKind } from "./acp-content.js";
 
 const require = createRequire(import.meta.url);
 const { version: PACKAGE_VERSION } = require("../package.json");
@@ -58,32 +59,6 @@ const MAX_SESSIONS = 1;
 
 /** Max events buffered per session before oldest are dropped. */
 const MAX_EVENT_QUEUE_SIZE = 10000;
-
-// Tool kind mapping (same as acp-server.js)
-const TOOL_KIND_MAP = {
-  read_file: "read",
-  list_files: "read",
-  grep: "search",
-  write_file: "edit",
-  replace_in_file: "edit",
-  run_command: "execute",
-  web_search: "fetch",
-  web_fetch: "fetch",
-  reflect: "think",
-  remember: "think",
-  recall: "think",
-  delegate: "other",
-  ask_user: "other",
-  save_plan: "think",
-  get_current_plan: "think",
-  complete_plan_step: "think",
-  load_plan_progress: "think",
-  update_plan_status: "think",
-};
-
-function toolKind(name) {
-  return TOOL_KIND_MAP[name] || "other";
-}
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
@@ -219,11 +194,13 @@ class RemoteSession {
  * @param {string} [options.authToken] - Auth token for Bearer auth
  * @param {number} [options.port] - HTTP port (default: 7700)
  * @param {string} [options.listenHost] - Listen address (default: "0.0.0.0")
- * @returns {{ server: http.Server, close: () => void }}
+ * @param {boolean} [options.quiet] - Suppress startup banner output
+ * @returns {{ server: http.Server, close: () => Promise<void> }}
  */
 export function startRemoteServer(options = {}) {
   const port = options.port || 7700;
   const listenHost = options.listenHost || "0.0.0.0";
+  const quiet = options.quiet === true;
   const authToken = options.authToken || process.env.SMOL_AGENT_AUTH_TOKEN || null;
   const sessions = new Map();
 
@@ -287,7 +264,7 @@ export function startRemoteServer(options = {}) {
         callId,
         name,
         args,
-        kind: toolKind(name),
+        kind: acpToolKind(name),
         status: "in_progress",
       });
     };
@@ -371,7 +348,7 @@ export function startRemoteServer(options = {}) {
           callId,
           name,
           args,
-          kind: toolKind(name),
+          kind: acpToolKind(name),
         });
 
         logger.info(`[Remote] Approval request — ${callId}: ${name}(${Object.keys(args || {}).join(", ")})`);
@@ -594,7 +571,7 @@ export function startRemoteServer(options = {}) {
         callId,
         name,
         status: "in_progress",
-        kind: toolKind(name),
+        kind: acpToolKind(name),
       });
     }
 
@@ -698,23 +675,25 @@ export function startRemoteServer(options = {}) {
   server.listen(port, listenHost, () => {
     const addr = `http://${listenHost}:${port}`;
     logger.info(`[Remote] Server listening on ${addr} — model: ${options.model || "default"}, host: ${options.host || "default"}`);
-    console.log(`smol-agent remote server v${PACKAGE_VERSION}`);
-    console.log(`Listening on ${addr}`);
-    console.log(`Auth: ${authToken ? "enabled (token required)" : "disabled (open access)"}`);
-    console.log("");
-    console.log("Endpoints:");
-    console.log(`  GET    ${addr}/api/status`);
-    console.log(`  POST   ${addr}/api/sessions`);
-    console.log(`  DELETE  ${addr}/api/sessions/:id`);
-    console.log(`  POST   ${addr}/api/sessions/:id/prompt`);
-    console.log(`  GET    ${addr}/api/sessions/:id/events`);
-    console.log(`  POST   ${addr}/api/sessions/:id/cancel`);
-    console.log(`  POST   ${addr}/api/sessions/:id/approve`);
-    console.log("");
-    if (!authToken) {
-      console.log("WARNING: No auth token configured. The server is open to anyone who can reach it.");
-      console.log("Set --auth-token <token> or SMOL_AGENT_AUTH_TOKEN env var to require authentication.");
+    if (!quiet) {
+      console.log(`smol-agent remote server v${PACKAGE_VERSION}`);
+      console.log(`Listening on ${addr}`);
+      console.log(`Auth: ${authToken ? "enabled (token required)" : "disabled (open access)"}`);
       console.log("");
+      console.log("Endpoints:");
+      console.log(`  GET    ${addr}/api/status`);
+      console.log(`  POST   ${addr}/api/sessions`);
+      console.log(`  DELETE  ${addr}/api/sessions/:id`);
+      console.log(`  POST   ${addr}/api/sessions/:id/prompt`);
+      console.log(`  GET    ${addr}/api/sessions/:id/events`);
+      console.log(`  POST   ${addr}/api/sessions/:id/cancel`);
+      console.log(`  POST   ${addr}/api/sessions/:id/approve`);
+      console.log("");
+      if (!authToken) {
+        console.log("WARNING: No auth token configured. The server is open to anyone who can reach it.");
+        console.log("Set --auth-token <token> or SMOL_AGENT_AUTH_TOKEN env var to require authentication.");
+        console.log("");
+      }
     }
   });
 
@@ -725,7 +704,12 @@ export function startRemoteServer(options = {}) {
       session.destroy();
     }
     sessions.clear();
-    server.close();
+    return new Promise((resolve, reject) => {
+      server.close((err) => {
+        if (err) reject(err);
+        else resolve();
+      });
+    });
   };
 
   return { server, close };
