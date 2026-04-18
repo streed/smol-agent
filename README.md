@@ -605,7 +605,7 @@ Communicates via JSON-RPC over stdio, compatible with ACP-compatible editors.
 
 When using token auth (`SMOL_AGENT_AUTH_TOKEN` or `--auth-token`), send the secret in `authenticate` as `_meta.token` with `methodId: "smol_bearer"` (the SDK strips other fields).
 
-For **known gaps** (single concurrent session, MCP params, remote vs disk session ids), **experimenting with a sibling checkout** such as `../t3code` as the jail (`-d`), and a phased plan to close limitations, see [docs/acp-t3code-roadmap.md](docs/acp-t3code-roadmap.md).
+For **known gaps** (single concurrent session, MCP params, remote vs disk session ids), **experimenting with a sibling checkout** such as `../t3code` as the jail (`-d`), and a phased plan to close limitations, see [docs/acp-t3code-roadmap.md](docs/acp-t3code-roadmap.md). That doc also covers how **t3code** already uses ACP for **OpenCode** and **Cursor (agent)**, and how **smol-agent** is intended to plug in the same way.
 
 ## Cross-Agent Communication
 

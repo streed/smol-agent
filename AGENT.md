@@ -79,7 +79,7 @@ The agent is an EventEmitter that drives a loop: send messages to the LLM provid
 | File | Purpose |
 |------|---------|
 | `cross-agent-communication.md` | Cross-repo inbox/letter protocol between agents. |
-| `acp-t3code-roadmap.md` | **Planning only:** ACP limitations, phased backlog, experimenting with jail pointed at a sibling `../t3code` checkout; not a t3code product integration. |
+| `acp-t3code-roadmap.md` | **Planning only:** ACP limitations, phased backlog, t3code’s existing OpenCode/Cursor-over-ACP pattern and planned smol-agent parity, experimenting with jail at `../t3code`; product wiring stays in t3code. |
 
 ### Providers (src/providers/)
 

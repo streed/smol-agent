@@ -8,7 +8,14 @@ This document is **planning and documentation only** for the smol-agent reposito
 
 **t3code** is the `@t3tools/monorepo` project: a minimal web (and desktop) GUI for coding agents (Codex, Claude, etc.), built with **Turbo**, **Bun**, and **Effect**. It is a separate codebase from smol-agent.
 
-Using smol-agent as an **ACP backend** while editing t3code is a reasonable local experiment: point the agent jail at the t3code checkout and connect an ACP-capable client to `smol-agent --acp`.
+**ACP in t3code today:** the product already drives **OpenCode** and **Cursor (agent)** over **ACP** — same stdio JSON-RPC pattern this repo implements for `smol-agent --acp`. That sets the bar for **smol-agent integration**: behave as another first-class ACP agent backend the UI can spawn and talk to, alongside those existing integrations.
+
+| Direction | Role |
+|-----------|------|
+| **OpenCode / Cursor via ACP** | Established in t3code; reference behavior for capabilities, lifecycle, and UX expectations. |
+| **smol-agent via ACP** | **Planned** — same wire protocol; smol-agent-side work is closing gaps in [Current ACP limitations](#current-acp-limitations-smol-agent) and documenting auth/session semantics; t3code-side wiring is a separate product decision. |
+
+Using smol-agent as an **ACP backend** while editing t3code is already a reasonable local experiment: point the agent jail at the t3code checkout and connect any ACP-capable client (including harnesses that mirror how t3code talks to OpenCode/Cursor) to `smol-agent --acp`.
 
 ---
 
@@ -56,15 +63,16 @@ This does **not** add smol-agent to t3code’s UI or installer; it only document
 
 ## What “full t3code integration” could mean (future, mostly outside this repo)
 
-Product-level integration would likely live in **t3code** (custom agent template, env injection, docs). smol-agent would remain a separate binary or optional dependency.
+Product-level integration would likely live in **t3code** (agent picker entry next to OpenCode/Cursor, command template, env injection, docs). smol-agent would remain a separate binary or optional dependency, exposed through the **same ACP surface** t3code already uses for other agents.
 
 Possible building blocks:
 
-1. **Agent definition** — Command: `smol-agent --acp -d <workspaceRoot>`, env for provider.
-2. **Workspace root** — t3code passes the opened folder as `-d`.
-3. **Optional** — Wrapper script in t3code repo, health check, or model picker mapped to `unstable_setSessionModel` once implemented.
+1. **Parity with existing ACP agents** — Session lifecycle, `initialize` / capabilities, and error shapes should not surprise the UI if they already work for OpenCode/Cursor.
+2. **Agent definition** — Command: `smol-agent --acp -d <workspaceRoot>`, env for provider and optional `SMOL_AGENT_AUTH_TOKEN`.
+3. **Workspace root** — t3code passes the opened folder as `-d`.
+4. **Optional** — Wrapper script in t3code repo, health check, or model picker mapped to `unstable_setSessionModel` once implemented.
 
-Until then, treat **manual stdio + editor** as the supported experiment.
+Until then, treat **manual stdio + editor** (or any ACP test client) as the supported experiment.
 
 ---
 
