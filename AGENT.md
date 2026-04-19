@@ -71,7 +71,7 @@ The agent is an EventEmitter that drives a loop: send messages to the LLM provid
 | `memory-bank.js` | 190 | **Structured memory.** Manages `.smol-agent/memory-bank/` files: `projectContext.md`, `techContext.md`, `progress.md`, `learnings.md`. Provides cross-session project knowledge. |
 | `checkpoint.js` | 372 | **Git checkpoint system.** Creates snapshots in `.smol-agent/checkpoints/` before agent runs. Enables `/undo` to rollback changes. Uses a shadow git repo to avoid polluting main repo. |
 | `architect.js` | 170 | **Architect mode.** Two-pass approach: 1) read-only analysis produces a plan, 2) editor pass executes the plan. Separates planning from execution. |
-| `acp-server.js` | 535 | **Agent Client Protocol server.** Implements ACP spec for IDE/editor integration. Exposes agent via JSON-RPC. Handles tool kind mapping for approvals. |
+| `acp-server.js` | 825 | **Agent Client Protocol server.** Implements ACP spec for IDE/editor integration. Exposes agent via JSON-RPC. Tool approvals, unstable session list/resume, `session/set_model` → `Agent#setModel` when idle. |
 | `settings.js` | ~50 | User settings loaded from `.smol-agent/settings.json`. |
 
 ### Docs (`docs/`)

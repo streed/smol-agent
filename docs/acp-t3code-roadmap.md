@@ -27,7 +27,7 @@ These are accurate as of the planning pass that added this document. Treat as a 
 |------|------------------|----------------|
 | **Concurrent sessions** | `MAX_SESSIONS = 1` | Global singletons (jail, network clients, sub-agent config) make multi-session unsafe without refactors. |
 | **`session/fork` (unstable)** | Not implemented | Nice for “branch” conversations; needs message/session clone + new id. |
-| **`unstable_setSessionModel`** | Not implemented | Needs safe runtime model/provider switch and capability advertisement. |
+| **`unstable_setSessionModel`** | Implemented (`session/set_model`) — calls `Agent#setModel` when idle; same provider family only | Changing provider/backend still requires a new process or session. |
 | **MCP `mcpServers` in `newSession` / `load`** | Ignored | Spec allows MCP alongside the agent; we do not connect MCP from ACP params yet. |
 | **Remote HTTP server (`--remote`)** | Session ids are UUIDs; disk sessions use smol hex ids | Two different identity models; confusing if you expect one id everywhere. |
 | **Authentication** | Shared secret validated against `authenticate._meta.token` | SDK Zod strips unknown top-level fields; token must ride on `_meta` (see README ACP section). |
@@ -86,7 +86,7 @@ Until then, treat **manual stdio + editor** (or any ACP test client) as the supp
 
 ### Phase B — Protocol gaps without large refactors
 
-- Implement **`unstable_setSessionModel`** where it is safe (same provider family, re-init provider).
+- **`unstable_setSessionModel`** — done (idle sessions only; same provider/backend as the process).
 - Implement **`unstable_forkSession`** as “duplicate messages + new session file” (or explicitly defer with `methodNotFound` until designed).
 - **Remote server**: choose **one** story — either align HTTP session ids with persisted sessions or document **dual-ID** semantics and API responses.
 

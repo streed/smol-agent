@@ -11,7 +11,7 @@
  *
  * Key components:
  * - SmolACPAgent: initialize, newSession, loadSession, resume (unstable), list (unstable),
- *   setSessionMode, setSessionConfigOption, authenticate, prompt, cancel
+ *   setSessionMode, setSessionConfigOption, unstable_setSessionModel, authenticate, prompt, cancel
  * - Prompt content: Text, resource_link (reads files inside jail), embedded text resources
  * - Tool kind mapping: ./acp-content.js (shared with remote-server.js)
  * - Session IDs: Same IDs as on-disk `.smol-agent` sessions (startSession on new)
@@ -302,6 +302,40 @@ class SmolACPAgent {
 
   async setSessionConfigOption(_params) {
     return { configOptions: [] };
+  }
+
+  /**
+   * Unstable: `session/set_model` — switch the LLM model for an idle session (same provider family).
+   * Delegates to Agent#setModel (see agent.js).
+   */
+  async unstable_setSessionModel(params) {
+    const sessionId = params?.sessionId;
+    const modelId = params?.modelId;
+    if (!sessionId || typeof sessionId !== "string") {
+      throw new acp.RequestError(-32602, "session/set_model requires sessionId");
+    }
+    if (!modelId || typeof modelId !== "string") {
+      throw new acp.RequestError(-32602, "session/set_model requires modelId");
+    }
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      throw new acp.RequestError(-32602, `Unknown session: ${sessionId}`);
+    }
+    const { agent } = session;
+    if (agent.running) {
+      throw new acp.RequestError(
+        -32602,
+        "Cannot change model while a prompt turn is in progress; cancel the turn first",
+      );
+    }
+    try {
+      agent.setModel(modelId);
+    } catch (e) {
+      throw new acp.RequestError(-32602, e?.message || String(e));
+    }
+    logger.info(`[ACP] session/set_model — session: ${sessionId.slice(0, 8)}…, model: ${modelId}`);
+    await agent.saveSession?.().catch(() => {});
+    return {};
   }
 
   _notifyModeUpdate(sessionId, agent) {
@@ -746,6 +780,8 @@ class SmolACPAgent {
 }
 
 // ── Start the ACP server ────────────────────────────────────────────
+
+export { SmolACPAgent };
 
 export function startACPServer(options = {}) {
   const output = Writable.toWeb(process.stdout);
