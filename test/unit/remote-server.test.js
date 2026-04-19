@@ -6,7 +6,7 @@
  *
  * Dependencies: @jest/globals, node:http, ../../src/remote-server.js
  */
-import { describe, test, expect, beforeAll, afterAll, beforeEach } from "@jest/globals";
+import { describe, test, expect, beforeAll, afterAll, beforeEach, jest } from "@jest/globals";
 import http from "node:http";
 import { startRemoteServer } from "../../src/remote-server.js";
 
@@ -53,11 +53,12 @@ describe("Remote Server", () => {
     let serverHandle;
     const port = 17701;
 
-    afterAll(() => {
-      if (serverHandle) serverHandle.close();
+    afterAll(async () => {
+      if (serverHandle) await serverHandle.close();
     });
 
     test("starts and responds to health check", async () => {
+      const consoleLogSpy = jest.spyOn(console, "log").mockImplementation(() => {});
       serverHandle = startRemoteServer({
         port,
         listenHost: "127.0.0.1",
@@ -65,6 +66,7 @@ describe("Remote Server", () => {
         provider: "ollama",
         host: "http://127.0.0.1:1",
         model: "test-model",
+        quiet: true,
       });
 
       // Wait for server to be listening
@@ -75,6 +77,8 @@ describe("Remote Server", () => {
       expect(json.agent).toBe("smol-agent");
       expect(json.version).toBeDefined();
       expect(Array.isArray(json.sessions)).toBe(true);
+      expect(consoleLogSpy).not.toHaveBeenCalled();
+      consoleLogSpy.mockRestore();
     });
   });
 
@@ -90,12 +94,13 @@ describe("Remote Server", () => {
         authToken: token,
         provider: "ollama",
         host: "http://127.0.0.1:1",
+        quiet: true,
       });
       await new Promise((resolve) => serverHandle.server.once("listening", resolve));
     });
 
-    afterAll(() => {
-      if (serverHandle) serverHandle.close();
+    afterAll(async () => {
+      if (serverHandle) await serverHandle.close();
     });
 
     test("rejects requests without auth token", async () => {
@@ -132,12 +137,13 @@ describe("Remote Server", () => {
         listenHost: "127.0.0.1",
         provider: "ollama",
         host: "http://127.0.0.1:1",
+        quiet: true,
       });
       await new Promise((resolve) => serverHandle.server.once("listening", resolve));
     });
 
-    afterAll(() => {
-      if (serverHandle) serverHandle.close();
+    afterAll(async () => {
+      if (serverHandle) await serverHandle.close();
     });
 
     test("creates a session", async () => {
@@ -225,6 +231,7 @@ describe("Remote Server", () => {
         listenHost: "127.0.0.1",
         provider: "ollama",
         host: "http://127.0.0.1:1",
+        quiet: true,
       });
       await new Promise((resolve) => serverHandle.server.once("listening", resolve));
     });
@@ -237,8 +244,8 @@ describe("Remote Server", () => {
       sessionId = json.sessionId;
     });
 
-    afterAll(() => {
-      if (serverHandle) serverHandle.close();
+    afterAll(async () => {
+      if (serverHandle) await serverHandle.close();
     });
 
     test("returns empty events for idle session", async () => {
@@ -281,12 +288,13 @@ describe("Remote Server", () => {
         listenHost: "127.0.0.1",
         provider: "ollama",
         host: "http://127.0.0.1:1",
+        quiet: true,
       });
       await new Promise((resolve) => serverHandle.server.once("listening", resolve));
     });
 
-    afterAll(() => {
-      if (serverHandle) serverHandle.close();
+    afterAll(async () => {
+      if (serverHandle) await serverHandle.close();
     });
 
     test("handles OPTIONS preflight request", async () => {
@@ -305,12 +313,13 @@ describe("Remote Server", () => {
         listenHost: "127.0.0.1",
         provider: "ollama",
         host: "http://127.0.0.1:1",
+        quiet: true,
       });
       await new Promise((resolve) => serverHandle.server.once("listening", resolve));
     });
 
-    afterAll(() => {
-      if (serverHandle) serverHandle.close();
+    afterAll(async () => {
+      if (serverHandle) await serverHandle.close();
     });
 
     test("returns 404 for unknown routes", async () => {
@@ -350,6 +359,29 @@ describe("Remote Server", () => {
       expect(json.error).toMatch(/No pending/);
 
       await request("DELETE", `/api/sessions/${created.sessionId}`, { port });
+    });
+  });
+
+  describe("shutdown", () => {
+    test("close resolves after the server has fully stopped", async () => {
+      const port = 17707;
+      const serverHandle = startRemoteServer({
+        port,
+        listenHost: "127.0.0.1",
+        provider: "ollama",
+        host: "http://127.0.0.1:1",
+        quiet: true,
+      });
+
+      await new Promise((resolve) => serverHandle.server.once("listening", resolve));
+
+      const closeResult = serverHandle.close();
+      expect(closeResult).toBeInstanceOf(Promise);
+      await closeResult;
+
+      await expect(request("GET", "/api/status", { port })).rejects.toMatchObject({
+        code: "ECONNREFUSED",
+      });
     });
   });
 });

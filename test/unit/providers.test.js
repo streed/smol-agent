@@ -481,11 +481,17 @@ describe("OpenAICompatibleProvider._adaptMessagesForOpenAI()", () => {
 
 describe("AnthropicProvider._headers()", () => {
   test("omits x-api-key when no API key configured", () => {
-    const p = new AnthropicProvider({ model: "claude-sonnet-4-20250514" });
+    const errorSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+    const p = new AnthropicProvider({
+      model: "claude-sonnet-4-20250514",
+      suppressMissingKeyWarning: true,
+    });
     const headers = p._headers();
     expect(headers["x-api-key"]).toBeUndefined();
     expect(headers["Content-Type"]).toBe("application/json");
     expect(headers["anthropic-version"]).toBe("2023-06-01");
+    expect(errorSpy).not.toHaveBeenCalled();
+    errorSpy.mockRestore();
   });
 
   test("includes x-api-key when API key is set", () => {

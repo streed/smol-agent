@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "@jest/globals";
+import { afterEach, beforeEach, describe, expect, it } from "@jest/globals";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -16,9 +16,18 @@ const RUNTIME_CONTEXT = {
 
 describe("Agent runtime context integration", () => {
   let cwd;
+  let agents;
 
   beforeEach(async () => {
     cwd = await fs.mkdtemp(path.join(os.tmpdir(), "smol-agent-agent-runtime-"));
+    agents = [];
+  });
+
+  afterEach(async () => {
+    for (const agent of agents) {
+      agent.destroy();
+    }
+    await new Promise((resolve) => setTimeout(resolve, 0));
   });
 
   it("passes runtime context into the provider and new sessions", () => {
@@ -28,6 +37,7 @@ describe("Agent runtime context integration", () => {
       jailDirectory: cwd,
       runtimeContext: RUNTIME_CONTEXT,
     });
+    agents.push(agent);
 
     const session = agent.startSession("legal reviewer");
 
@@ -50,6 +60,7 @@ describe("Agent runtime context integration", () => {
       apiKey: "test-key",
       jailDirectory: cwd,
     });
+    agents.push(agent);
     agent._init = async function initForTest() {
       this._initialized = true;
       this.messages = [{ role: "system", content: "Test system prompt" }];

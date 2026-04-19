@@ -10,6 +10,7 @@ const config = {
         target: 'ES2022',
         module: 'NodeNext',
         moduleResolution: 'NodeNext',
+        isolatedModules: true,
         esModuleInterop: true,
         strict: false,
         noImplicitAny: false,

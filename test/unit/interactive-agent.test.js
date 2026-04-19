@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "@jest/globals";
+import { afterEach, beforeEach, describe, expect, it } from "@jest/globals";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -8,9 +8,18 @@ import { createInteractiveAgent } from "../../src/runtime/interactive-agent.js";
 
 describe("createInteractiveAgent", () => {
   let cwd;
+  let agents;
 
   beforeEach(async () => {
     cwd = await fs.mkdtemp(path.join(os.tmpdir(), "smol-agent-interactive-"));
+    agents = [];
+  });
+
+  afterEach(async () => {
+    for (const agent of agents) {
+      agent.destroy();
+    }
+    await new Promise((resolve) => setTimeout(resolve, 0));
   });
 
   it("resumes an existing session and rehydrates provider runtime context", async () => {
@@ -33,6 +42,7 @@ describe("createInteractiveAgent", () => {
       apiKey: "test-key",
       sessionId: session.id,
     });
+    agents.push(agent);
 
     expect(resumed).toBe(true);
     expect(agent.llmProvider.baseURL).toBe("https://router.example/v1");
@@ -47,6 +57,7 @@ describe("createInteractiveAgent", () => {
       apiKey: "test-key",
       programmaticToolCalling: true,
     });
+    agents.push(agent);
 
     expect(agent.llmProvider.programmaticToolCalling).toBe(true);
   });

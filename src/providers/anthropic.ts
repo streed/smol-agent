@@ -76,12 +76,13 @@ export class AnthropicProvider extends BaseLLMProvider {
     "claude-sonnet-4-5-20250929", "claude-opus-4-5-20251101",
   ]);
 
-  constructor({ apiKey, model, baseURL, rateLimitConfig, programmaticToolCalling }: {
+  constructor({ apiKey, model, baseURL, rateLimitConfig, programmaticToolCalling, suppressMissingKeyWarning }: {
     apiKey?: string;
     model?: string;
     baseURL?: string;
     rateLimitConfig?: Partial<import("./base.js").RateLimitConfig>;
     programmaticToolCalling?: boolean;
+    suppressMissingKeyWarning?: boolean;
   } = {}) {
     super({
       model: model || "claude-sonnet-4-20250514",
@@ -98,7 +99,7 @@ export class AnthropicProvider extends BaseLLMProvider {
     this.programmaticToolCalling = programmaticToolCalling ?? false;
     this._containerId = null;
 
-    if (!this.apiKey) {
+    if (!this.apiKey && !suppressMissingKeyWarning) {
       console.error("⚠️  No ANTHROPIC_API_KEY found. Set it via:");
       console.error("   export ANTHROPIC_API_KEY=your-key-here");
       console.error("   or use --api-key option");
