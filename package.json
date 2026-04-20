@@ -3,16 +3,16 @@
   "version": "1.1.0",
   "description": "A small coding agent that runs in your terminal, powered by Ollama for local LLM hosting",
   "type": "module",
-  "main": "./src/index.ts",
+  "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./src/index.ts"
+      "import": "./dist/index.js"
     }
   },
   "bin": {
-    "smol-agent": "./src/index.ts"
+    "smol-agent": "./dist/index.js"
   },
   "repository": {
     "type": "git",
@@ -34,9 +34,10 @@
   },
   "homepage": "https://github.com/smol-ai/smol-agent#readme",
   "scripts": {
+    "prepare": "npm run build",
     "start": "tsx src/index.ts",
-    "build": "tsc",
-    "build:strict": "tsc -p tsconfig.build.json",
+    "build": "tsc && node scripts/prepare-dist.mjs",
+    "build:strict": "tsc -p tsconfig.build.json && node scripts/prepare-dist.mjs",
     "typecheck": "tsc --noEmit",
     "typecheck:watch": "tsc --noEmit --watch",
     "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
