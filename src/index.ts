@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 /**
  * CLI entry point for smol-agent.
+ * @file-doc
  *
  * Parses command-line arguments, initializes the LLM provider,
- * creates the Agent instance, and renders the terminal UI.
+ * creates the Agent instance, and renders the terminal UI (or runs headless).
  *
  * CLI Options:
  *   -m, --model <name>       Model to use (default depends on provider)
@@ -16,11 +17,16 @@
  *   -c, --continue           Resume most recent session
  *   --list-sessions          List all saved sessions
  *   --acp                    Run as ACP server over stdio
+ *   --watch [path] <prompt>  Watch directory for file changes and process with prompt
+ *   --watch-ext <exts>       Comma-separated extensions for --watch
+ *   --watch-exclude <dirs>   Comma-separated exclude patterns for --watch
+ *   --headless               Run without interactive UI (for scripting/watcher)
  *
  * Dependencies: ./agent.js, ./ui/App.js, node:path, node:fs, node:os,
  *               ./settings.js, ./sessions.js, ./token-estimator.js,
- *               node:child_process, ./acp-server.js, ./cross-agent.js
- * Depended on by: jest.config.js, scripts/update-benchmark-readme.js
+ *               node:child_process, ./providers/index.js, ./remote-server.js,
+ *               ./acp-server.js, ./cross-agent.js, ./watcher.js, ./review.js, ./context.js
+ * Depended on by: jest.config.js, scripts/update-benchmark-readme.js,
  *                  src/agent.js (indirect), src/checkpoint.js,
  *                  src/context-manager.js, src/cross-agent.js, src/ollama.js,
  *                  src/providers/openai-compatible.js, src/repo-map.js, src/skills.js,
@@ -42,6 +48,7 @@ import { listSessions, findSession } from "./sessions.js";
 import { cleanup as cleanupTiktoken } from "./token-estimator.js";
 import { execSync } from "node:child_process";
 import { createProvider } from "./providers/index.js";
+import { setToolPolicy } from "./tools/registry.js";
 
 
 // XDG-compliant global config directory
@@ -166,7 +173,14 @@ Options:
       --acp                 Run as ACP (Agent Client Protocol) server over stdio
       --review [branch]     Review changes on a branch (default: current branch) and exit
       --show-code-exec      Show internal tool calls made by code_execution tool
+      --headless            Run without interactive UI (for scripting/watcher)
+      --no-exec             Block command/code execution + network tools (file writes still allowed)
+      --read-only           Block all write/execute/network tools (analysis only)
       --watch-inbox         Watch inbox for cross-agent letters and process them
+      --watch [path] <prompt> Watch directory for new/changed files and process with prompt
+      --watch-ext <exts>    Comma-separated extensions for --watch (e.g., "js,ts,py")
+      --watch-exclude <dirs> Comma-separated exclude patterns for --watch
+      --watch-allow-exec    Let --watch children run commands (DANGEROUS on untrusted trees)
       --progress-fd <n>    Write JSONL progress events to file descriptor n
 
   -s, --session <id>        Resume a saved session by ID or name
@@ -198,8 +212,11 @@ Examples:
   smol-agent "fix the bug in src/index.js"   # One-shot prompt
   smol-agent -m llama3.2 "add tests"         # Use specific model
   smol-agent -d ./my-project "refactor"      # Work in specific directory
-  smol-agent --session abc123                 # Resume session
-  smol-agent --continue                       # Resume most recent session
+  smol-agent --session abc123               # Resume session
+  smol-agent --continue                      # Resume most recent session
+  smol-agent --watch "Add docstrings"        # Watch current dir, add docstrings
+  smol-agent --watch ./src "Review for bugs" # Watch src dir, review changes
+  smol-agent --watch . "Lint" --watch-ext "js,ts" --watch-exclude "node_modules,dist"
 `);
 }
 
@@ -231,6 +248,15 @@ let remoteMode = false;         // --remote to run as REST server
 let remotePort = undefined;     // --port <n> for remote server port
 let remoteListenHost = undefined; // --listen <host> for remote server bind address
 let authToken = undefined;      // --auth-token <token> for remote server auth
+let watchMode = false;          // --watch to watch directory for changes
+let watchPath: string | undefined = undefined;  // --watch <path> directory to watch
+let watchPrompt: string | undefined = undefined; // Prompt for processing watched files
+let watchExtensions: string | undefined = undefined; // --watch-ext "js,ts,py"
+let watchExclude: string | undefined = undefined; // --watch-exclude "node_modules,.git"
+let watchAllowExec = false;     // --watch-allow-exec to let watcher children run commands
+let headless = false;           // --headless to run without UI
+let noExec = false;             // --no-exec to block command/code execution + network tools
+let readOnlyMode = false;       // --read-only to block all write/execute/network tools
 
 for (let i = 0; i < args.length; i++) {
   const a = args[i];
@@ -297,6 +323,30 @@ for (let i = 0; i < args.length; i++) {
     remoteListenHost = args[++i];
   } else if (a === "--auth-token" && args[i + 1]) {
     authToken = args[++i];
+  } else if (a === "--watch") {
+    watchMode = true;
+    // Next arg is the path if it doesn't start with - and isn't a prompt
+    if (args[i + 1] && !args[i + 1].startsWith("-")) {
+      const nextArg = args[i + 1];
+      // Check if it's an existing directory
+      const potentialPath = path.resolve(nextArg);
+      if (fs.existsSync(potentialPath) && fs.statSync(potentialPath).isDirectory()) {
+        watchPath = potentialPath;
+        i++;
+      }
+    }
+  } else if (a === "--watch-ext" && args[i + 1]) {
+    watchExtensions = args[++i];
+  } else if (a === "--watch-exclude" && args[i + 1]) {
+    watchExclude = args[++i];
+  } else if (a === "--watch-allow-exec") {
+    watchAllowExec = true;
+  } else if (a === "--headless") {
+    headless = true;
+  } else if (a === "--no-exec") {
+    noExec = true;
+  } else if (a === "--read-only") {
+    readOnlyMode = true;
   } else if (a === "--self-update") {
     runSelfUpdate();
   } else if (a === "--help") {
@@ -317,6 +367,13 @@ if (!apiKey && process.env.SMOL_AGENT_API_KEY) {
 // ── Main entry point ───────────────────────────────────────────────────
 
 async function main(): Promise<void> {
+  // Apply the global tool-execution policy before any agent runs. --read-only
+  // blocks all mutation/execution; --no-exec blocks command/code execution +
+  // network while still allowing file writes (used by --watch children).
+  if (noExec || readOnlyMode) {
+    setToolPolicy({ noExec, readOnly: readOnlyMode });
+  }
+
   // Handle --list-sessions
   if (listSessionsFlag) {
     const sessions = await listSessions(jailDirectory);
@@ -398,6 +455,40 @@ async function main(): Promise<void> {
     return;
   }
 
+  // Handle --watch
+  if (watchMode) {
+    if (!promptText) {
+      console.error("Error: --watch requires a prompt to process files.");
+      console.error("Usage: smol-agent --watch [path] \"prompt\"");
+      process.exit(1);
+    }
+    const settings = await loadSettings(jailDirectory);
+    const providerName = provider || (settings.provider as string | undefined) || process.env.SMOL_AGENT_PROVIDER || "ollama";
+    const modelName = model || (settings.model as string | undefined) || process.env.SMOL_AGENT_MODEL;
+
+    const { watchDirectory } = await import("./watcher.js");
+    const abortController = new AbortController();
+
+    process.on("SIGINT", () => {
+      abortController.abort();
+      process.exit(0);
+    });
+
+    await watchDirectory({
+      watchPath: watchPath || jailDirectory,
+      prompt: promptText,
+      provider: providerName,
+      model: modelName,
+      apiKey,
+      jailDirectory,
+      signal: abortController.signal,
+      allowExec: watchAllowExec,
+      extensions: watchExtensions?.split(",").map(e => e.trim().startsWith(".") ? e.trim() : `.${e.trim()}`),
+      exclude: watchExclude?.split(",").map(e => e.trim()),
+    });
+    return;
+  }
+
   // Handle --review
   if (reviewFlag) {
     const [{ reviewPass }, { createProvider: createProv }, { gatherContext: gather }] = await Promise.all([
@@ -466,14 +557,43 @@ async function main(): Promise<void> {
   if (sessionId) {
     const found = await findSession(jailDirectory, sessionId);
     if (found) {
-      agent.loadSession(found);
+      // Agent exposes resumeSession(id), not loadSession(); pass the resolved
+      // session ID (findSession also accepts a name) so the right session loads.
+      await agent.resumeSession(found.id);
     } else {
       console.warn(`Session ${sessionId} not found. Starting fresh.`);
     }
   }
 
-  // Start UI
-  await startApp(agent, promptText);
+  // Start UI (or run headless)
+  if (headless) {
+    // Run without UI - just process the prompt and exit
+    if (!promptText) {
+      console.error("Error: --headless requires a prompt");
+      process.exit(1);
+    }
+    
+    // Set up event handlers for headless output
+    agent.on("tool_call", (toolCall: { name: string }) => {
+      console.log(`  → ${toolCall.name}`);
+    });
+    agent.on("error", (err: Error) => {
+      console.error(`  ❌ Error: ${err.message}`);
+    });
+
+    // run() resolves to the agent's final response; print it so headless mode
+    // produces usable output (e.g. for scripting and the --watch child agents).
+    const response = await agent.run(promptText);
+    if (response) console.log(response);
+    process.exit(0);
+  } else {
+    await startApp(agent, promptText, {
+      showCodeExec,
+      autoApprove,
+      autoApproveWrites,
+      autoApproveExecute,
+    });
+  }
 }
 
 main().catch((err: Error) => {

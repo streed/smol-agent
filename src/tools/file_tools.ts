@@ -249,14 +249,20 @@ register("write_file", {
       /^\.env$/,
       /^\.env\..+/,
     ];
-    const normalized = filePath.replace(/\\/g, "/").replace(/^\.\//, "");
+
+    // Resolve first (canonicalizes `..` and symlinks, enforces the jail), then
+    // test the denylist against the jail-RELATIVE resolved path. Testing the raw
+    // input let `foo/../.git/hooks/x` or a symlink dodge these anchored patterns
+    // while still resolving to the real protected file.
+    const resolved = resolveJailedPath(cwd, filePath);
+    let jailRoot = cwd;
+    try { jailRoot = fs.realpathSync(cwd); } catch { /* cwd should exist; fall back to cwd */ }
+    const relForCheck = path.relative(jailRoot, resolved).replace(/\\/g, "/");
     for (const pattern of PROTECTED_PATTERNS) {
-      if (pattern.test(normalized)) {
+      if (pattern.test(relForCheck)) {
         return { error: { code: ToolErrorCode.PERMISSION_DENIED, message: `Blocked: writing to '${filePath}' is not allowed for security reasons`, details: { filePath } } };
       }
     }
-
-    const resolved = resolveJailedPath(cwd, filePath);
 
     // Ensure parent directories exist
     const dir = path.dirname(resolved);

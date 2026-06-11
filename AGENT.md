@@ -34,6 +34,9 @@ No build step — plain ES modules (Node >= 20).
 | `-c, --continue` | Resume the most recent session |
 | `--list-sessions` | List all saved sessions |
 | `--acp` | Run as ACP (Agent Client Protocol) server over stdio |
+| `--watch [path] <prompt>` | Watch directory for new/changed files and process with prompt |
+| `--watch-ext <exts>` | Comma-separated extensions for --watch (e.g., "js,ts,py") |
+| `--watch-exclude <dirs>` | Comma-separated exclude patterns for --watch |
 | `--help` | Show help message |
 
 Providers: `ollama` (default), `openai`, `anthropic`, `grok`, `groq`, `gemini`
@@ -72,6 +75,7 @@ The agent is an EventEmitter that drives a loop: send messages to the LLM provid
 | `checkpoint.js` | 372 | **Git checkpoint system.** Creates snapshots in `.smol-agent/checkpoints/` before agent runs. Enables `/undo` to rollback changes. Uses a shadow git repo to avoid polluting main repo. |
 | `architect.js` | 170 | **Architect mode.** Two-pass approach: 1) read-only analysis produces a plan, 2) editor pass executes the plan. Separates planning from execution. |
 | `acp-server.js` | 535 | **Agent Client Protocol server.** Implements ACP spec for IDE/editor integration. Exposes agent via JSON-RPC. Handles tool kind mapping for approvals. |
+| `watcher.js` | 444 | **Directory watcher.** Watches a directory and runs a headless agent on each changed file with a provided prompt. Sequential queue + content-hash baseline so the agent's own edits don't re-trigger processing (no runaway loop). Used by `--watch` CLI flag. |
 | `settings.js` | ~50 | User settings loaded from `.smol-agent/settings.json`. |
 
 ### Providers (src/providers/)

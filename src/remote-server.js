@@ -218,12 +218,15 @@ class RemoteSession {
  * @param {boolean} [options.autoApprove] - Auto-approve all tool calls
  * @param {string} [options.authToken] - Auth token for Bearer auth
  * @param {number} [options.port] - HTTP port (default: 7700)
- * @param {string} [options.listenHost] - Listen address (default: "0.0.0.0")
+ * @param {string} [options.listenHost] - Listen address (default: "127.0.0.1")
  * @returns {{ server: http.Server, close: () => void }}
  */
 export function startRemoteServer(options = {}) {
   const port = options.port || 7700;
-  const listenHost = options.listenHost || "0.0.0.0";
+  // Default to loopback. The server can execute tools (incl. run_command) on the
+  // host, so binding to 0.0.0.0 exposes RCE to the network — require an explicit
+  // --listen to opt into a non-loopback interface.
+  const listenHost = options.listenHost || "127.0.0.1";
   const authToken = options.authToken || process.env.SMOL_AGENT_AUTH_TOKEN || null;
   const sessions = new Map();
 
@@ -715,6 +718,13 @@ export function startRemoteServer(options = {}) {
       console.log("WARNING: No auth token configured. The server is open to anyone who can reach it.");
       console.log("Set --auth-token <token> or SMOL_AGENT_AUTH_TOKEN env var to require authentication.");
       console.log("");
+      const isLoopback = listenHost === "127.0.0.1" || listenHost === "::1" || listenHost === "localhost";
+      if (!isLoopback) {
+        console.log(`DANGER: Bound to non-loopback address ${listenHost} with NO auth token.`);
+        console.log("This exposes tool execution (including run_command) to the network as the current user.");
+        console.log("Bind to 127.0.0.1 or set an auth token before exposing this server.");
+        console.log("");
+      }
     }
   });
 

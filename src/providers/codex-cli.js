@@ -209,7 +209,13 @@ export class CodexCLIProvider extends BaseLLMProvider {
 
   async _ensureSession() {
     if (!this._sessionPromise) {
-      this._sessionPromise = this._startSession();
+      // Don't permanently cache a rejected session: if startup fails (spawn error,
+      // initialize/thread-start timeout, early exit), clear the promise so the next
+      // call can retry instead of re-awaiting the same rejection forever.
+      this._sessionPromise = this._startSession().catch((err) => {
+        this._sessionPromise = null;
+        throw err;
+      });
     }
     return this._sessionPromise;
   }
@@ -277,6 +283,12 @@ export class CodexCLIProvider extends BaseLLMProvider {
       this._failAllPending(
         new Error(`codex app-server exited (code=${code ?? "null"}, signal=${signal ?? "null"}).`),
       );
+      // The app-server is gone; drop cached session state so a subsequent turn
+      // re-spawns a fresh session instead of using a dead thread/child handle.
+      this._sessionPromise = null;
+      this._threadId = null;
+      this._child = null;
+      this._hasStartedConversation = false;
     });
 
     await this._sendRequest("initialize", {
