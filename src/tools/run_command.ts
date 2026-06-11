@@ -34,12 +34,25 @@ import { resolveJailedPath } from "../path-utils.js";
 const FORBIDDEN_PATTERNS: RegExp[] = [
   // Remote code execution — any pipe to shell interpreter
   /\|\s*(bash|sh|zsh|ksh|fish|dash|csh|tcsh)\b/i,
+  // Pipe into a scripting interpreter reading code from stdin (e.g. `curl x | python`,
+  // `... | node -`). Allows `cat data | python script.py` (interpreter not at end / no `-`).
+  /\|\s*(python3?|node|nodejs|ruby|perl|php|deno|bun)\s*$/im,
+  /\|\s*(python3?|node|nodejs|ruby|perl|php|deno|bun)\s+-(\s|$)/i,
   /curl\s+.*>\s*\/(tmp|var|etc|root|home)/i,
   /wget\s+.*>\s*\/(tmp|var|etc|root|home)/i,
+
+  // Interpreter one-liner code execution (arbitrary code, bypasses the shell denylist)
+  /\bpython3?\s+(-c|-m\s+(?:base64|http\.server))\b/i,
+  /\bnode(js)?\s+(-e|--eval|-p|--print)\b/i,
+  /\bdeno\s+eval\b/i,
+  /\bbun\s+(-e|--eval)\b/i,
+  /\bphp\s+-r\b/i,
 
   // System destruction — rm with recursive/force flags (handles backslash evasion)
   /r\\?m\s+(-[a-z]*[rf][a-z]*\s+)*\//i,
   /r\\?m\s+(-[a-z]*[rf][a-z]*\s+)*\*/i,
+  // rm -rf targeting the home directory (~ or $HOME) — the earlier pattern only caught `/`
+  /r\\?m\s+(-[a-z]*[rf][a-z]*\s+)*(~|\$HOME|\$\{HOME\})/i,
   /mkfs/i,
   /dd\s+.*of=\/dev\//i,
   />\/dev\/(sda|hda|nvme|mmcblk)/i,
@@ -61,9 +74,14 @@ const FORBIDDEN_PATTERNS: RegExp[] = [
   // Named pipes (can be used for exploitation)
   /mkfifo/i,
 
-  // Sensitive file access (any command reading shadow files)
+  // Sensitive file access (any command reading shadow/secret stores)
   /\/etc\/shadow/i,
   /\/etc\/gshadow/i,
+  /\/etc\/passwd/i,
+  /(^|[\s/'"~])\.ssh\/(id_|authorized_keys|known_hosts)/i,
+  /\bid_(rsa|dsa|ecdsa|ed25519)\b/i,
+  /(^|[\s/'"~])\.aws\/credentials/i,
+  /(^|[\s/'"~])\.gnupg\//i,
 
   // Eval/exec-based bypass attempts
   /\beval\s+["']/i,
@@ -119,11 +137,12 @@ interface RunCommandResult {
 }
 
 /**
- * Validate a shell command for dangerous patterns
+ * Validate a shell command for dangerous patterns.
+ * Exported for testing — this is the denylist used by the run_command tool.
  * @param command - The command to validate
  * @returns Validation result
  */
-function validateCommand(command: string): ValidationResult {
+export function validateCommand(command: string): ValidationResult {
   if (typeof command !== 'string') {
     return { valid: false, error: 'Command must be a string' };
   }

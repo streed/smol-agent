@@ -25,6 +25,8 @@ Thumbs.db
 # Agent state
 .smol-agent/
 PLAN-*.md
+plan.md
+.smol-gang-plan.md
 
 # Logs
 *.log

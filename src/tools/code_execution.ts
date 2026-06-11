@@ -24,8 +24,11 @@
  */
 
 import vm from "node:vm";
-import { register, getTools, execute as executeRegisteredTool } from "./registry.js";
+import { register, getTools, execute as executeRegisteredTool, requiresApproval } from "./registry.js";
 import { logger } from "../logger.js";
+
+/** Async gate invoked before a nested dangerous tool call. Returns true to allow. */
+type ApproveFn = (name: string, args: Record<string, unknown>) => Promise<boolean>;
 
 /** Maximum execution time for code (ms) */
 const CODE_TIMEOUT = 120_000; // 2 minutes
@@ -44,6 +47,8 @@ interface ToolDefinition {
 interface SandboxOptions {
   onToolCall?: (name: string, args: Record<string, unknown>) => void;
   onToolResult?: (name: string, args: Record<string, unknown>, result: unknown) => void;
+  /** Gate invoked before each nested approval-requiring tool call. */
+  approve?: ApproveFn;
 }
 
 interface SandboxResult {
@@ -59,6 +64,7 @@ interface CodeExecutionContext {
   cwd?: string;
   eventEmitter?: NodeJS.EventEmitter | null;
   allowedTools?: Set<string>;
+  approve?: ApproveFn;
 }
 
 interface CodeExecutionResult {
@@ -85,7 +91,7 @@ type ToolFunction = (args?: Record<string, unknown>) => Promise<unknown>;
  *   - setTimeout / clearTimeout (capped)
  */
 function buildSandbox(tools: ToolDefinition[], options: SandboxOptions = {}): SandboxResult {
-  const { onToolCall, onToolResult } = options;
+  const { onToolCall, onToolResult, approve } = options;
   let stdout = "";
   let stderr = "";
 
@@ -141,6 +147,17 @@ function buildSandbox(tools: ToolDefinition[], options: SandboxOptions = {}): Sa
 
     sandbox[toolName] = async (args: Record<string, unknown> = {}): Promise<unknown> => {
       if (onToolCall) onToolCall(toolName, args);
+      // Gate nested approval-requiring tools (run_command, write_file, …) so a single
+      // approved code_execution call can't silently run unlimited dangerous actions.
+      // Without an `approve` gate, the registry execution policy is the only guard.
+      if (approve && requiresApproval(toolName)) {
+        const allowed = await approve(toolName, args);
+        if (!allowed) {
+          const denied = { error: `Denied: "${toolName}" was not approved inside code_execution.` };
+          if (onToolResult) onToolResult(toolName, args, denied);
+          return denied;
+        }
+      }
       logger.info(`[code_execution] calling tool: ${toolName}`);
       const result = await executeRegisteredTool(toolName, args);
       if (onToolResult) onToolResult(toolName, args, result);
@@ -183,7 +200,7 @@ register("code_execution", {
     },
   },
   core: true,
-  async execute({ code }: CodeExecutionArgs, { cwd: _cwd, eventEmitter, allowedTools }: CodeExecutionContext = {}): Promise<CodeExecutionResult> {
+  async execute({ code }: CodeExecutionArgs, { cwd: _cwd, eventEmitter, allowedTools, approve }: CodeExecutionContext = {}): Promise<CodeExecutionResult> {
     if (!code || typeof code !== "string") {
       return { error: "code must be a non-empty string" };
     }
@@ -200,6 +217,7 @@ register("code_execution", {
 
     const toolCallLog: Array<{ name: string; args: Record<string, unknown>; timestamp: number }> = [];
     const { context, getOutput } = buildSandbox(allTools as ToolDefinition[], {
+      approve,
       onToolCall: (name, args) => {
         toolCallLog.push({ name, args, timestamp: Date.now() });
         // Emit event for UI visibility

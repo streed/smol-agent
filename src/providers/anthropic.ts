@@ -25,7 +25,17 @@
 import { BaseLLMProvider, MAX_RETRIES, type ChatMessage, type ToolDefinition, type StreamEvent, type OnRetryCallback, type ChatResponse } from "./base.js";
 import { formatAPIError } from "./errors.js";
 
-const DEFAULT_MAX_TOKENS = 8192; // Anthropic max output tokens
+const DEFAULT_MAX_TOKENS = 8192; // Fallback when no maxTokens is supplied to a call
+
+// Output-token caps. The agent passes its *context-window* size (e.g. 128000) as
+// `maxTokens` here, so we must NOT use that value directly as the API's `max_tokens`
+// (the output cap) — doing so previously forced a hard clamp to 8192, silently
+// truncating long generations. Decouple the two: cap output at a sane budget that is
+// valid across all current Anthropic models (Sonnet 4.6 / Haiku 4.5 = 64K, Opus &
+// Fable = 128K output). Streaming can safely request large outputs; non-streaming must
+// stay under ~16K to avoid SDK/HTTP request timeouts.
+const STREAM_OUTPUT_CAP = 32000;
+const NONSTREAM_OUTPUT_CAP = 16000;
 
 interface AnthropicTool {
   name: string;
@@ -351,7 +361,7 @@ export class AnthropicProvider extends BaseLLMProvider {
 
     const body: Record<string, unknown> = {
       model: this._model,
-      max_tokens: maxTokens > 8192 ? 8192 : maxTokens,
+      max_tokens: Math.min(maxTokens, STREAM_OUTPUT_CAP),
       messages: convertedMessages,
       stream: true,
     };
@@ -535,7 +545,7 @@ export class AnthropicProvider extends BaseLLMProvider {
 
     const body: Record<string, unknown> = {
       model: this._model,
-      max_tokens: maxTokens > 8192 ? 8192 : maxTokens,
+      max_tokens: Math.min(maxTokens, NONSTREAM_OUTPUT_CAP),
       messages: convertedMessages,
     };
     if (system) body.system = system;

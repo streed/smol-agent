@@ -13,21 +13,20 @@
  * complex tasks where the user wants a plan before execution.
  *
  * Key exports:
- *   - runArchitectPass(client, model, task, cwd): Main entry point
+ *   - architectPass(provider, task, options): Main entry point
  *   - ARCHITECT_SYSTEM_PROMPT: System prompt for architect mode
  *
- * Dependencies: ./ollama.js, ./tools/registry.js, ./tool-call-parser.js,
+ * Dependencies: ./providers/base.js, ./tools/registry.js, ./tool-call-parser.js,
  *               ./logger.js, ./constants.js
  * Depended on by: src/agent.js, src/memory-bank.js, src/tools/memory.js,
  *                 src/tools/reflection.js, src/ui/App.js, test/e2e/scenarios/12-sub-agent.test.js
  */
 
-import * as ollama from "./ollama.js";
 import * as registry from "./tools/registry.js";
 import { parseToolCallsFromContent } from "./tool-call-parser.js";
 import { logger } from "./logger.js";
 import { DEFAULT_MAX_TOKENS } from "./constants.js";
-import type { ChatMessage, ToolDefinition } from "./ollama.js";
+import type { ChatMessage, ToolDefinition, BaseLLMProvider } from "./providers/base.js";
 
 const READ_ONLY_TOOLS = new Set(["read_file", "list_files", "grep"]);
 
@@ -69,15 +68,13 @@ export type ArchitectProgressEvent =
 /**
  * Run the architect pass: analyze the codebase and produce a plan.
  *
- * @param client - Ollama client
- * @param model - Model name
+ * @param provider - LLM provider (any BaseLLMProvider: ollama, anthropic, openai-compatible, …)
  * @param task - User's task description
  * @param options - Optional configuration
  * @returns The implementation plan
  */
 export async function architectPass(
-  client: unknown,
-  model: string,
+  provider: BaseLLMProvider,
   task: string,
   options: ArchitectOptions = {}
 ): Promise<string> {
@@ -114,12 +111,11 @@ export async function architectPass(
 
     let response;
     try {
-      // Cast client to expected type for backward-compatible API
-      response = await ollama.chatWithRetry(
-        client as Parameters<typeof ollama.chatWithRetry>[0],
-        model,
+      // Use the provider abstraction so architect mode works for every backend
+      // (anthropic/openai-compatible never set a legacy `.client`). chatWithRetry
+      // returns the same { message: { content, tool_calls } } shape across providers.
+      response = await provider.chatWithRetry(
         messages as ChatMessage[],
-        // Cast through unknown since types don't overlap
         readOnlyTools as unknown as ToolDefinition[],
         signal as AbortSignal | undefined,
         maxTokens,

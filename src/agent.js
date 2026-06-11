@@ -467,6 +467,34 @@ export class Agent extends EventEmitter {
   }
 
   /**
+   * Approval gate for tools invoked *indirectly* — e.g. a run_command/write_file
+   * call made from inside a code_execution script. Mirrors the top-level approval
+   * semantics so a single approved code_execution can't run unlimited dangerous
+   * actions unprompted. The registry execution policy is an independent guard for
+   * unattended modes (headless/--watch).
+   * @returns {Promise<boolean>} true if the nested call may proceed.
+   */
+  async _gateNestedToolCall(name, args) {
+    if (!registry.requiresApproval(name)) return true;
+    if (this._approveAll) return true;
+    const category = registry.getToolCategory(name);
+    if (this._approvedCategories.has(category)) return true;
+    // Headless / no handler: behave like the top-level loop (which auto-runs);
+    // the registry policy layer is what confines unattended runs.
+    if (!this._approvalHandler) return true;
+    let decision;
+    try {
+      this.emit("tool_call", { name, args });
+      decision = await this._approvalHandler(name, args);
+    } catch (err) {
+      logger.warn(`Approval handler threw (nested tool call): ${err.message}`);
+      decision = { approved: false };
+    }
+    if (decision?.approveAll) this._approveAll = true;
+    return !!decision?.approved;
+  }
+
+  /**
    * Set approved categories from loaded settings.
    * Merges with existing approved categories.
    * @param {string[]} categories - Categories to approve
@@ -886,6 +914,15 @@ export class Agent extends EventEmitter {
    *   "error"          — Error
    */
   async run(userMessage) {
+    // Re-entrancy guard: a run() started while another is in flight (e.g. a UI
+    // event arriving during fire-and-forget auto-reflection) would clobber the
+    // shared per-run state reset below. Route the message into the existing
+    // injection queue so the active run picks it up instead of racing a second one.
+    if (this.running) {
+      logger.warn("run() called while a run is already in progress; queuing message as an injection");
+      this.inject(userMessage);
+      return null;
+    }
     await this._init();
 
     // Check and summarize/prune conversation if approaching limit
@@ -987,7 +1024,7 @@ export class Agent extends EventEmitter {
       this.emit("status", { phase: "architect", message: "Analyzing codebase..." });
       try {
         const projectContext = this.messages[0]?.content?.split("# Project context\n\n")[1] || "";
-        const plan = await architectPass(this.client, this.model, userMessage, {
+        const plan = await architectPass(this.llmProvider, userMessage, {
           cwd: this.jailDirectory,
           maxTokens: this.maxTokens,
           projectContext,
@@ -1204,12 +1241,15 @@ export class Agent extends EventEmitter {
           if (toolCalls.length > 0) {
             const allowedNames = new Set(tools.map(t => t.function.name));
             toolCalls = toolCalls.filter(tc => allowedNames.has(tc.function.name));
-            // Block dangerous tools invoked via text-parsed calls (higher injection risk)
-            const DANGEROUS_TOOLS = new Set(["run_command", "write_file"]);
-            const hadDangerous = toolCalls.some(tc => DANGEROUS_TOOLS.has(tc.function.name) && tc._textParsed);
+            // Block dangerous tools invoked via text-parsed calls (higher injection risk).
+            // Use the registry's approval requirement as the source of truth so this
+            // stays in sync with every approval-gated tool (run_command, write_file,
+            // code_execution, git, apply_patch, ...) instead of a hardcoded subset.
+            const isDangerous = (name) => registry.requiresApproval(name);
+            const hadDangerous = toolCalls.some(tc => isDangerous(tc.function.name) && tc._textParsed);
             if (hadDangerous) {
               logger.warn("Blocked dangerous tool call from text-parsed content (potential prompt injection)");
-              toolCalls = toolCalls.filter(tc => !(DANGEROUS_TOOLS.has(tc.function.name) && tc._textParsed));
+              toolCalls = toolCalls.filter(tc => !(isDangerous(tc.function.name) && tc._textParsed));
             }
           }
         }
@@ -1349,7 +1389,12 @@ export class Agent extends EventEmitter {
           // Touch the LRU cache so this tool stays active
           this._lruCache.touch(name);
 
-          let result = await registry.execute(name, args, { cwd: this.jailDirectory, eventEmitter: this });
+          let result = await registry.execute(name, args, {
+            cwd: this.jailDirectory,
+            eventEmitter: this,
+            // Gate dangerous tools invoked indirectly (e.g. from code_execution).
+            approve: (n, a) => this._gateNestedToolCall(n, a),
+          });
 
           // Track consecutive failures
           if (result?.error) {

