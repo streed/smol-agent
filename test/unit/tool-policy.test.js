@@ -4,7 +4,8 @@
  *
  * Covers:
  *  - sensitive-file blocking (default ON) for read/write tools
- *  - no-exec mode (blocks command/code execution + network, allows file writes)
+ *  - no-exec mode (blocks command/code execution, allows file writes)
+ *  - no-network mode (blocks web_search, web_fetch, send_letter)
  *  - read-only mode (blocks writes; allows read-only run_command)
  *  - opting out via denySensitiveFiles:false
  *  - code_execution: a nested dangerous call is gated by the `approve` callback
@@ -17,6 +18,8 @@ import { execute, setJailDirectory, setToolPolicy, resetToolPolicy } from "../..
 import "../../src/tools/file_tools.js";
 import "../../src/tools/run_command.js";
 import "../../src/tools/code_execution.js";
+import "../../src/tools/web_search.js";
+import "../../src/tools/web_fetch.js";
 
 function blocked(result) {
   return !!(result && typeof result === "object" && "error" in result);
@@ -79,6 +82,36 @@ describe("registry tool-execution policy", () => {
     // A genuinely read-only command is permitted (it actually runs `ls`).
     const ls = await execute("run_command", { command: "ls" });
     expect(blockedByPolicy(ls)).toBe(false);
+  });
+
+  test("no-network mode blocks network tools but allows reads/writes", async () => {
+    setToolPolicy({ noNetwork: true });
+    // Network tools blocked
+    expect(blockedByPolicy(await execute("web_search", { query: "test" }))).toBe(true);
+    expect(blockedByPolicy(await execute("web_fetch", { url: "https://example.com" }))).toBe(true);
+    // File operations still allowed
+    expect(blocked(await execute("write_file", { filePath: "note.txt", content: "ok" }))).toBe(false);
+    expect(blocked(await execute("read_file", { filePath: "note.txt" }))).toBe(false);
+  });
+
+  test("blockNetwork alias works same as noNetwork", async () => {
+    setToolPolicy({ blockNetwork: true });
+    expect(blockedByPolicy(await execute("web_search", { query: "test" }))).toBe(true);
+  });
+
+  test("blockExec alias works same as noExec", async () => {
+    setToolPolicy({ blockExec: true });
+    expect(blockedByPolicy(await execute("run_command", { command: "echo hi" }))).toBe(true);
+  });
+
+  test("expanded sensitive patterns block .npmrc, .netrc, .p12, .pfx", async () => {
+    expect(blockedByPolicy(await execute("read_file", { filePath: ".npmrc" }))).toBe(true);
+    expect(blockedByPolicy(await execute("read_file", { filePath: ".netrc" }))).toBe(true);
+    expect(blockedByPolicy(await execute("read_file", { filePath: "certs/cert.p12" }))).toBe(true);
+    expect(blockedByPolicy(await execute("read_file", { filePath: "certs/cert.pfx" }))).toBe(true);
+    expect(blockedByPolicy(await execute("read_file", { filePath: "keys/key.asc" }))).toBe(true);
+    expect(blockedByPolicy(await execute("read_file", { filePath: ".gcp/credentials.json" }))).toBe(true);
+    expect(blockedByPolicy(await execute("read_file", { filePath: "service-account.json" }))).toBe(true);
   });
 });
 

@@ -7,9 +7,11 @@
  *   - Manage jail directory for path validation
  *   - Support progressive tool discovery with tool groups
  *   - Handle tool approval categories (read, write, execute, network, safe)
+ *   - Enforce tool execution policies (noExec, noNetwork, readOnly, denySensitiveFiles)
  *   - Per-input safety properties (isReadOnly, isDestructive, isConcurrencySafe)
  *   - Per-tool result size limits for context management
  *   - Approval info formatting for UI
+ *   - Audit logging for policy violations
  *
  * Tool groups:
  *   - core: Always available (read_file, write_file, replace_in_file, list_files, grep, run_command, ask_user)
@@ -17,6 +19,12 @@
  *   - memory: remember, recall, memory_bank_read, memory_bank_write, memory_bank_init, save_context
  *   - web: web_search, web_fetch
  *   - multi_agent: delegate, send_letter, check_reply, read_inbox, read_outbox, reply_to_letter, list_agents, link_repos, set_snippet, find_agent_for_task
+ *
+ * Policy flags (set via setToolPolicy):
+ *   - denySensitiveFiles: Block access to sensitive files (.env, .pem, .npmrc, etc.) [default: ON]
+ *   - noExec / blockExec: Block command/code execution tools
+ *   - noNetwork / blockNetwork: Block network tools (web_search, web_fetch, send_letter)
+ *   - readOnly: Block all mutating tools (writes, executes, network)
  *
  * Key exports:
  *   - register(name, def): Register a tool
@@ -26,6 +34,7 @@
  *   - getApprovalInfo(name, args): Get formatted info for approval UI
  *   - getMaxResultSize(name): Get max result size for a tool
  *   - setJailDirectory(dir), getJailDirectory(): Jail path management
+ *   - setToolPolicy(policy), resetToolPolicy(): Policy management
  *   - getToolGroups(), getToolsForGroups(), describeInactiveGroups(): Tool discovery
  *
  * @file-doc
@@ -144,10 +153,16 @@ export function getJailDirectory(): string {
 export interface ToolPolicy {
   /** Block reads/writes of secret-bearing files (.env, *.pem, id_rsa, .ssh/, credentials…). Default: ON. */
   denySensitiveFiles?: boolean;
-  /** Block command/code execution + outbound-network tools. File writes still allowed. */
+  /** Block command/code execution tools. File writes still allowed. */
   noExec?: boolean;
-  /** Block every mutating / executing / network tool (strict read-only). */
+  /** Alias for noExec (deprecated, use noExec). */
+  blockExec?: boolean;
+  /** Block every mutating / executing tool (strict read-only). */
   readOnly?: boolean;
+  /** Block network tools (web_search, web_fetch, send_letter). */
+  noNetwork?: boolean;
+  /** Alias for noNetwork (deprecated, use noNetwork). */
+  blockNetwork?: boolean;
 }
 
 let _toolPolicy: ToolPolicy = {};
@@ -173,18 +188,37 @@ export function resetToolPolicy(): void {
  * unlike write_file's `^\.git/...` denylist).
  */
 const SENSITIVE_FILE_PATTERNS: RegExp[] = [
+  // Environment files
   /(^|\/)\.env(\.|$)/i,
+  // Certificate and key files
   /\.pem$/i,
   /\.key$/i,
+  /\.p12$/i,
+  /\.pfx$/i,
+  /\.asc$/i,
+  // SSH keys
   /(^|\/)id_(rsa|dsa|ecdsa|ed25519)\b/i,
   /(^|\/)\.ssh\//i,
+  // Cloud credentials
   /(^|\/)\.aws\//i,
+  /(^|\/)\.gcp\//i,
+  /(^|\/)\.azure\//i,
+  // GPG/PGP
   /(^|\/)\.gnupg\//i,
+  // Generic credentials
   /credentials/i,
   /secrets?\.(json|ya?ml)$/i,
+  // Auth token files
+  /(^|\/)\.npmrc$/i,
+  /(^|\/)\.netrc$/i,
+  /(^|\/)\.htpasswd$/i,
+  /(^|\/)\.pgpass$/i,
+  /(^|\/)\.my\.cnf$/i,
+  // OAuth/App credentials
+  /oauth.*\.json$/i,
+  /service-account.*\.json$/i,
 ];
 
-const EXEC_OR_NETWORK_CATEGORIES = new Set(["execute", "network"]);
 
 function extractPathArg(args: Record<string, unknown>): string | null {
   const p = args?.filePath ?? args?.path ?? args?.file;
@@ -194,30 +228,50 @@ function extractPathArg(args: Record<string, unknown>): string | null {
 /**
  * Apply the global policy to a single tool call.
  * Returns an error-result object to short-circuit execution, or null to allow.
+ * Logs policy violations for audit purposes.
  */
 function enforceToolPolicy(name: string, args: Record<string, unknown>): unknown | null {
   const policy = _toolPolicy;
   const category = getToolCategory(name);
-
-  if (policy.noExec || policy.readOnly) {
-    if (name === "code_execution" || EXEC_OR_NETWORK_CATEGORIES.has(category)) {
+  
+  // Normalize aliases: blockExec -> noExec, blockNetwork -> noNetwork
+  const effectiveNoExec = policy.noExec ?? policy.blockExec ?? false;
+  const effectiveNoNetwork = policy.noNetwork ?? policy.blockNetwork ?? false;
+  const policyMode = policy.readOnly ? "read-only" : effectiveNoExec ? "no-exec" : effectiveNoNetwork ? "no-network" : "standard";
+  
+  // Block execute tools under no-exec or read-only
+  if (effectiveNoExec || policy.readOnly) {
+    if (name === "code_execution" || category === "execute") {
       // Under read-only (but not no-exec), a genuinely read-only run_command is fine.
       const cmd = typeof args?.command === "string" ? (args.command as string) : "";
-      const readOnlyOk = policy.readOnly && !policy.noExec && name === "run_command" && isReadOnlyCommand(cmd);
+      const readOnlyOk = policy.readOnly && !effectiveNoExec && name === "run_command" && isReadOnlyCommand(cmd);
       if (!readOnlyOk) {
+        logger.warn(`[policy] Blocked tool "${name}" in ${policyMode} mode`);
         return errorToResult(new ToolError(
           ToolErrorCode.PERMISSION_DENIED,
-          `Tool "${name}" is blocked by the active execution policy (${policy.noExec ? "no-exec" : "read-only"} mode).`,
+          `Tool "${name}" is blocked by the active execution policy (${policyMode} mode).`,
           { tool: name },
         ));
       }
     }
   }
 
+  // Block write tools under read-only
   if (policy.readOnly && category === "write") {
+    logger.warn(`[policy] Blocked write tool "${name}" in read-only mode`);
     return errorToResult(new ToolError(
       ToolErrorCode.PERMISSION_DENIED,
       `Tool "${name}" is blocked in read-only mode.`,
+      { tool: name },
+    ));
+  }
+  
+  // Block network tools under no-network
+  if (effectiveNoNetwork && category === "network") {
+    logger.warn(`[policy] Blocked network tool "${name}" in no-network mode`);
+    return errorToResult(new ToolError(
+      ToolErrorCode.PERMISSION_DENIED,
+      `Tool "${name}" is blocked in no-network mode.`,
       { tool: name },
     ));
   }
@@ -228,6 +282,7 @@ function enforceToolPolicy(name: string, args: Record<string, unknown>): unknown
     if (p) {
       for (const re of SENSITIVE_FILE_PATTERNS) {
         if (re.test(p)) {
+          logger.warn(`[policy] Blocked access to sensitive file "${p}"`);
           return errorToResult(new ToolError(
             ToolErrorCode.PERMISSION_DENIED,
             `Access to potentially sensitive file blocked: '${p}'. Disable with setToolPolicy({ denySensitiveFiles: false }) if this is intentional.`,
@@ -292,15 +347,22 @@ const DANGEROUS_TOOLS = new Set([
 
 /** Approval categories for granular auto-approve */
 const TOOL_CATEGORIES: Record<string, string> = {
+  // Read tools
   read_file: "read",
   list_files: "read",
   grep: "read",
+  // Write tools
   write_file: "write",
   replace_in_file: "write",
+  // Execute tools
   run_command: "execute",
   git: "execute",
+  code_execution: "execute",
+  // Network tools
   web_search: "network",
   web_fetch: "network",
+  send_letter: "network",
+  // Safe tools (no side effects)
   ask_user: "safe",
   delegate: "safe",
   remember: "safe",
@@ -315,16 +377,20 @@ const TOOL_CATEGORIES: Record<string, string> = {
   memory_bank_read: "safe",
   memory_bank_write: "safe",
   memory_bank_init: "safe",
-  send_letter: "network",
   check_reply: "safe",
   read_inbox: "safe",
   read_outbox: "safe",
-  reply_to_letter: "write",
   list_agents: "safe",
   link_repos: "safe",
   set_snippet: "safe",
   find_agent_for_task: "safe",
-  code_execution: "execute",
+  list_sessions: "safe",
+  delete_session: "safe",
+  rename_session: "safe",
+  caveman_compress: "safe",
+  discover_tools: "safe",
+  // Write-adjacent tools
+  reply_to_letter: "write",
 };
 
 // ============ Validation ============
